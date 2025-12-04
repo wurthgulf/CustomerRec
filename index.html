@@ -3926,12 +3926,33 @@ renderListView: function() {
     App.UI.updateSortIndicators('visits');
 }, 
 renderCalendarView: function() { const el = document.getElementById('calendar-view'); if (this.calendar) this.calendar.destroy(); const v = App.Helpers.getScopedData('visits'), c = App.DB.get('customers'); const ev = v.map(i => ({ id: i.id, title: `${c.find(cu => cu.accountNo === i.customerId)?.companyName || 'N/A'} - ${i.purpose}`, start: i.dateTime, backgroundColor: i.status === 'Completed' ? 'var(--success)' : i.status === 'Overdue' ? 'var(--danger)' : 'var(--primary)' })); this.calendar = new FullCalendar.Calendar(el, { initialView: 'dayGridMonth', headerToolbar: { left: 'prev,next today', center: 'title', right: 'dayGridMonth,timeGridWeek,listWeek' }, events: ev, editable: true, dateClick: (info) => this.showScheduleModal(null, info.dateStr), eventClick: (info) => this.showScheduleModal(info.event.id) }); this.calendar.render(); }, 
+
 renderMapView: function() {
         const mapContainer = document.getElementById('map-view');
         if (!mapContainer) return;
 
-        // Toggle route controls
-        document.getElementById('clear-route-btn').classList.toggle('hidden', !App.state.visits.plannedRoute);
+        // --- NEW: Toggle route controls ---
+        const hasRoute = !!App.state.visits.plannedRoute;
+        const clearBtn = document.getElementById('clear-route-btn');
+        clearBtn.classList.toggle('hidden', !hasRoute);
+
+        // Add "Start Navigation" button dynamically if not exists
+        let navBtn = document.getElementById('start-nav-btn');
+        if (!navBtn && hasRoute) {
+            // Create the button
+            navBtn = document.createElement('button');
+            navBtn.id = 'start-nav-btn';
+            navBtn.className = 'btn btn-success';
+            navBtn.innerHTML = '<i class="fas fa-location-arrow"></i> Start Navigation';
+            navBtn.style.marginLeft = '10px';
+            navBtn.onclick = () => this.exportRouteToGoogleMaps();
+            
+            // Append next to clear button
+            clearBtn.parentNode.insertBefore(navBtn, clearBtn.nextSibling);
+        } else if (navBtn && !hasRoute) {
+            navBtn.remove();
+        }
+        // ----------------------------------
 
         // Setup Filters
         const isAdmin = App.state.currentUser.role === 'admin';
@@ -3950,146 +3971,53 @@ renderMapView: function() {
             this.map = null;
         }
         
-        // --- 1. DEFINE MAP LAYERS (All Free) ---
-        
-        // A. Carto Voyager (Colorful, clean, business-friendly) - DEFAULT
-        const cartoVoyager = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-            attribution: '© CARTO',
-            maxZoom: 19
-        });
+        // Initialize Map
+        const cartoVoyager = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', { attribution: '© CARTO', maxZoom: 19 });
+        this.map = L.map('map-view', { center: [25.2048, 55.2708], zoom: 11, layers: [cartoVoyager] });
 
-        // B. Carto Positron (Minimalist Light Grey - Great for data visualization)
-        const cartoLight = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-            attribution: '© CARTO',
-            maxZoom: 19
-        });
-
-        // C. OpenStreetMap (High detail, standard look)
-        const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '© OpenStreetMap'
-        });
-
-        // D. Esri Satellite (World Imagery)
-        const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-            attribution: 'Tiles © Esri'
-        });
-
-        // E. Carto Dark Matter (High contrast night mode)
-        const cartoDark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-            attribution: '© CARTO'
-        });
-
-        // Initialize Map with Voyager as default
-        this.map = L.map('map-view', {
-            center: [25.2048, 55.2708],
-            zoom: 11,
-            layers: [cartoVoyager] 
-        });
-
-        // --- 2. PREPARE DATA ---
+        // Load Data
         let customersToDisplay = App.Helpers.getScopedData('customers', isAdmin ? (App.state.visits.mapConsultant === 'all' ? null : App.state.visits.mapConsultant) : App.state.currentUser.assignedConsultantId);
         
         const markers = L.markerClusterGroup();
-        const heatData = [];
-
         customersToDisplay.forEach((customer) => {
             if (customer.latitude && customer.longitude) {
-                // Add to Markers
                 const icon = App.Helpers.getCustomerMarkerIcon(customer);
-                const googleMapsUrl = `http://googleusercontent.com/maps.google.com/4{customer.latitude},${customer.longitude}`;
-                
-                const popupContent = `
-                    <div style="min-width: 200px;">
-                        <h4 style="margin: 0 0 5px 0; font-size: 1rem; color: var(--primary);">${customer.companyName}</h4>
-                        <div style="font-size: 0.85rem; color: #666; margin-bottom: 8px;">
-                            <i class="fas fa-map-pin"></i> ${customer.area}
-                        </div>
-                        <div style="margin-bottom: 10px; font-weight: 600;">
-                            Balance: ${App.Helpers.formatCurrency(customer.outstanding)}
-                        </div>
-                        <div style="display: flex; gap: 8px;">
-                            <a href="${googleMapsUrl}" target="_blank" class="btn btn-primary btn-sm" style="flex: 1; text-align: center; color: white; text-decoration: none; padding: 6px;">
-                                <i class="fas fa-location-arrow"></i> Go
-                            </a>
-                            <button class="btn btn-outline btn-sm" onclick="App.Customers.showCustomerDetail('${customer.accountNo}')" style="flex: 1;">
-                                <i class="fas fa-info-circle"></i> View
-                            </button>
-                        </div>
-                    </div>
-                `;
-                const marker = L.marker([customer.latitude, customer.longitude], { icon }).bindPopup(popupContent);
-                markers.addLayer(marker);
-
-                // Heatmap logic
-                let intensity = 0.5;
-                if (customer.outstanding > 50000) intensity = 1.0; 
-                else if (customer.outstanding > 10000) intensity = 0.7;
-                heatData.push([customer.latitude, customer.longitude, intensity]);
+                const popupContent = `<b>${customer.companyName}</b><br>${customer.area}<br>Balance: ${App.Helpers.formatCurrency(customer.outstanding)}`;
+                markers.addLayer(L.marker([customer.latitude, customer.longitude], { icon }).bindPopup(popupContent));
             }
         });
-
         this.map.addLayer(markers);
 
-        const heatLayer = L.heatLayer(heatData, {
-            radius: 25,
-            blur: 15,
-            maxZoom: 10,
-            gradient: {0.4: 'blue', 0.65: 'lime', 1: 'red'}
-        });
-
-        // --- 3. ADD LAYER CONTROLS ---
-        const baseMaps = {
-            "Business (Voyager)": cartoVoyager,
-            "Minimal (Light)": cartoLight,
-            "Detailed (OSM)": osmLayer,
-            "Satellite (Esri)": satelliteLayer,
-            "Night Mode (Dark)": cartoDark
-        };
-
-        const overlayMaps = {
-            "Customer Pins": markers,
-            "Debt Heatmap": heatLayer
-        };
-
-        L.control.layers(baseMaps, overlayMaps, { position: 'topright' }).addTo(this.map);
-
-        // --- 4. ADD LOCATE CONTROL ---
-        const locateControl = L.control({position: 'topleft'});
-        locateControl.onAdd = function () {
-            const div = L.DomUtil.create('div', 'leaflet-bar leaflet-control leaflet-control-custom');
-            div.innerHTML = `
-                <button style="background-color: white; border: none; width: 30px; height: 30px; cursor: pointer; display: flex; align-items: center; justify-content: center;" title="Show My Location">
-                    <i class="fas fa-crosshairs" style="font-size: 1.2rem; color: #333;"></i>
-                </button>`;
-            div.onclick = function(e) {
-                e.preventDefault();
-                if (navigator.geolocation) {
-                    App.UI.toast('Locating...', 'info');
-                    navigator.geolocation.getCurrentPosition(pos => {
-                        const { latitude, longitude } = pos.coords;
-                        App.Visits.map.flyTo([latitude, longitude], 14);
-                        L.marker([latitude, longitude], {
-                            icon: L.divIcon({
-                                className: 'user-loc',
-                                html: '<div style="width: 16px; height: 16px; background: #4285F4; border: 2px solid white; border-radius: 50%; box-shadow: 0 0 4px rgba(0,0,0,0.3);"></div>',
-                                iconSize: [16, 16]
-                            })
-                        }).addTo(App.Visits.map).bindPopup("You are here").openPopup();
-                    }, () => App.UI.toast('Location access denied.', 'error'));
-                }
-            };
-            return div;
-        };
-        locateControl.addTo(this.map);
-
-        if (markers.getLayers().length > 0) {
-            this.map.fitBounds(markers.getBounds().pad(0.1));
-        }
+        if (markers.getLayers().length > 0) this.map.fitBounds(markers.getBounds().pad(0.1));
         
-        if (App.state.visits.plannedRoute) {
-            this.drawPlannedRoute();
-        }
+        if (hasRoute) this.drawPlannedRoute();
     },
+
+    // --- NEW HELPER FUNCTION ---
+    exportRouteToGoogleMaps() {
+        const routeIds = App.state.visits.plannedRoute;
+        if (!routeIds || routeIds.length < 1) return;
+
+        const customerMap = App.DB.get('customers').reduce((map, c) => { map[c.accountNo] = c; return map; }, {});
+        
+        // 1. Get coordinates for all stops
+        const waypoints = routeIds
+            .map(id => customerMap[id])
+            .filter(c => c && c.latitude && c.longitude)
+            .map(c => `${c.latitude},${c.longitude}`);
+
+        if (waypoints.length === 0) return App.UI.toast('No valid GPS coordinates in route.', 'error');
+
+        // 2. Build URL: https://www.google.com/maps/dir/Current+Location/Stop1/Stop2/...
+        // "Current+Location" tells Google Maps to start from where the driver is right now.
+        const baseUrl = "https://www.google.com/maps/dir/Current+Location/";
+        const destinationString = waypoints.join("/");
+        const finalUrl = baseUrl + destinationString;
+
+        // 3. Open
+        window.open(finalUrl, '_blank');
+    },
+
 showScheduleModal: function(id = null, d = null, customerId = null) { 
     const f = document.getElementById('visit-form'); 
     f.reset(); 
@@ -6631,8 +6559,6 @@ Object.assign(App.Performance, {
     render() {
         const consultants = App.DB.get('consultants');
         const container = document.getElementById('performance-grid-container');
-        
-        // --- FIX: Remove the default grid class to fix alignment ---
         container.classList.remove('performance-grid'); 
         
         if (consultants.length === 0) {
@@ -6640,25 +6566,50 @@ Object.assign(App.Performance, {
             return;
         }
 
-        // 1. Calculate Scores & Rank Consultants
+        // 1. Calculate Scores & Badges
         const currentMonthStr = `${App.state.dashboardTimeFrame.year}-${(App.state.dashboardTimeFrame.month).toString().padStart(2, '0')}`;
         const customers = App.DB.get('customers');
-        const payments = App.DB.get('payments').filter(p => p.status === 'Completed' && p.date.startsWith(currentMonthStr));
-        const visits = App.DB.get('visits').filter(v => v.status === 'Completed' && v.dateTime.startsWith(currentMonthStr));
+        const payments = App.DB.get('payments');
+        const visits = App.DB.get('visits');
 
         const rankedConsultants = consultants.map(c => {
+            // A. Base Metrics
             const myCustomers = customers.filter(cust => cust.salesConsultantId === c.id).map(cust => cust.accountNo);
-            const collected = payments.filter(p => myCustomers.includes(p.customerId)).reduce((sum, p) => sum + p.amount, 0);
-            const visitCount = visits.filter(v => v.collectorId === c.id).length;
-            // Scoring: 1 pt per 1000 AED, 10 pts per visit
+            const paymentsInMonth = payments.filter(p => myCustomers.includes(p.customerId) && p.status === 'Completed' && p.date.startsWith(currentMonthStr));
+            const collected = paymentsInMonth.reduce((sum, p) => sum + p.amount, 0);
+            const visitCount = visits.filter(v => v.collectorId === c.id && v.status === 'Completed' && v.dateTime.startsWith(currentMonthStr)).length;
+            const overdueCount = visits.filter(v => v.collectorId === c.id && v.status === 'Overdue').length;
+            
+            // B. Badge Logic
+            const badges = [];
+            
+            // 🦈 Shark: High Collector (> 100k)
+            if (collected >= 100000) {
+                badges.push({ icon: 'fa-shark', color: '#0dcaf0', title: 'The Shark (High Value Collector)' });
+            }
+            
+            // 🛡️ Guardian: Clean Slate (No Overdue)
+            if (overdueCount === 0 && myCustomers.length > 0) {
+                badges.push({ icon: 'fa-shield-alt', color: '#10b981', title: 'Guardian (Zero Overdue Tasks)' });
+            }
+
+            // 🔥 On Fire: Recent Activity (Collection in last 48 hours)
+            const twoDaysAgo = new Date();
+            twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
+            const hasRecentPayment = payments.some(p => myCustomers.includes(p.customerId) && p.status === 'Completed' && new Date(p.date) >= twoDaysAgo);
+            
+            if (hasRecentPayment) {
+                badges.push({ icon: 'fa-fire', color: '#fd7e14', title: 'On Fire (Active Streak)' });
+            }
+
+            // C. Scoring
             const score = Math.floor((collected / 1000) + (visitCount * 10));
-            return { ...c, collected, visitCount, score };
+            return { ...c, collected, visitCount, score, badges };
         }).sort((a, b) => b.score - a.score);
 
         const topPerformer = rankedConsultants[0];
 
         // 2. Build The Layout
-        // We use a specific grid for the top section: 1fr (Banner) | 2fr (Table)
         const layoutHTML = `
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: var(--spacing-6); margin-bottom: var(--spacing-8);">
                 
@@ -6675,8 +6626,8 @@ Object.assign(App.Performance, {
                         ${topPerformer.name}
                     </div>
                     
-                    <div style="font-size: 1.25rem; color: #ffd700; font-weight: 700; margin-bottom: var(--spacing-4);">
-                        ${topPerformer.score} Points
+                    <div class="d-flex gap-2 mb-4">
+                        ${topPerformer.badges.map(b => `<i class="fas ${b.icon}" style="color:${b.color}; font-size: 1.2rem;" title="${b.title}"></i>`).join('')}
                     </div>
 
                     <div style="display: flex; gap: var(--spacing-4); font-size: var(--fs-sm); color: #adb5bd; border-top: 1px solid rgba(255,255,255,0.1); padding-top: var(--spacing-4); width: 100%; justify-content: center;">
@@ -6696,7 +6647,7 @@ Object.assign(App.Performance, {
                     <div class="card-header"><h3 class="card-title"><i class="fas fa-list-ol"></i> Leaderboard Ranking</h3></div>
                     <div class="table-container" style="flex-grow: 1;">
                         <table class="data-table">
-                            <thead><tr><th>Rank</th><th>Consultant</th><th>Score</th><th>Collected</th><th>Visits</th></tr></thead>
+                            <thead><tr><th>Rank</th><th>Consultant</th><th>Badges</th><th>Score</th><th>Collected</th></tr></thead>
                             <tbody>
                                 ${rankedConsultants.map((c, i) => `
                                     <tr style="${i === 0 ? 'background-color: rgba(255, 215, 0, 0.05);' : ''}">
@@ -6705,9 +6656,11 @@ Object.assign(App.Performance, {
                                             ${c.name} 
                                             ${i === 0 ? '<i class="fas fa-crown" style="color: #ffd700; margin-left: 5px;"></i>' : ''}
                                         </td>
+                                        <td>
+                                            ${c.badges.map(b => `<i class="fas ${b.icon}" style="color:${b.color}; margin-right:5px;" title="${b.title}"></i>`).join('')}
+                                        </td>
                                         <td><span class="status-badge" style="background: var(--dark); color: white; border: none;">${c.score}</span></td>
                                         <td>${App.Helpers.formatCurrency(c.collected)}</td>
-                                        <td>${c.visitCount}</td>
                                     </tr>
                                 `).join('')}
                             </tbody>
