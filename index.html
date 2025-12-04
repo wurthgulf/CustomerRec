@@ -820,13 +820,25 @@
 
 <!-- Command Palette Modal -->
 <div id="command-palette-modal" class="modal" style="align-items: flex-start; padding-top: 10vh;">
-    <div class="modal-content" style="max-width: 600px; padding: 0;">
-        <div class="d-flex align-items-center gap-2 p-3" style="border-bottom: 1px solid var(--border-color);">
-            <i class="fas fa-search" style="color: var(--text-secondary);"></i>
-            <input type="text" id="command-palette-input" class="form-control" placeholder="Search customers or payments..." style="border: none; background: transparent; box-shadow: none;">
+    <div class="modal-content" style="max-width: 600px; padding: 0; overflow: hidden; border-radius: 12px; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);">
+        <div class="d-flex align-items-center gap-2 p-3" style="border-bottom: 1px solid var(--border-color); background: var(--card-bg);">
+            <i class="fas fa-search" style="color: var(--text-secondary); font-size: 1.2rem;"></i>
+            <input type="text" id="command-palette-input" class="form-control" placeholder="Type a command or search..." style="border: none; background: transparent; box-shadow: none; font-size: 1.1rem; padding: 0.5rem;">
+            <div style="font-size: 0.8rem; color: var(--text-secondary); border: 1px solid var(--border-color); padding: 2px 6px; border-radius: 4px;">ESC</div>
         </div>
-        <div id="command-palette-results" style="max-height: 400px; overflow-y: auto; padding: var(--spacing-2);"></div>
+        <div id="command-palette-results" style="max-height: 400px; overflow-y: auto; padding: 0.5rem;">
+            </div>
+        <div class="p-2" style="background: var(--bg-color); border-top: 1px solid var(--border-color); font-size: 0.75rem; color: var(--text-secondary); text-align: right;">
+            <span style="margin-right: 10px;">Select <i class="fas fa-arrow-down"></i> <i class="fas fa-arrow-up"></i></span>
+            <span>Open <i class="fas fa-level-down-alt" style="transform: rotate(90deg);"></i></span>
+        </div>
     </div>
+    <style>
+        .command-item { padding: 12px 15px; cursor: pointer; border-radius: 8px; display: flex; align-items: center; gap: 15px; transition: all 0.1s; border-left: 3px solid transparent; }
+        .command-item.selected { background-color: var(--bg-color); border-left-color: var(--primary); }
+        .command-item:hover { background-color: var(--bg-color); }
+        .command-group-title { font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); margin: 10px 0 5px 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+    </style>
 </div>
 
 <!-- Loading Overlay -->
@@ -3200,48 +3212,48 @@ Object.assign(App.Dashboard, {
         App.Reports.displayReport(reportTitle, headers, data, '', ['csv', 'pdf']);
     }
 });
+
 Object.assign(App.MyDay, {
     map: null,
     routingControl: null,
-   setupEventListeners() {
+    setupEventListeners() {
         const page = document.getElementById('myday-page');
         page.addEventListener('click', e => {
-            const visitBtn = e.target.closest('.mark-done-btn');
-            const snoozeBtn = e.target.closest('.snooze-btn'); // <--- New Listener
+            const visitBtn = e.target.closest('.mark-done-btn'); // Handles 'End Visit'
+            const startBtn = e.target.closest('.start-visit-btn'); // Handles 'Start Visit'
+            const snoozeBtn = e.target.closest('.snooze-btn');
             const taskItem = e.target.closest('.clickable');
+
+            // --- NEW: Start Visit logic ---
+            if (startBtn) {
+                e.stopPropagation();
+                App.Visits.checkIn(startBtn.dataset.id);
+            }
+            // ------------------------------
 
             if (visitBtn) {
                 App.Visits.showMarkDoneModal(visitBtn.dataset.id);
             }
             
-            // --- SNOOZE LOGIC ---
             if (snoozeBtn) {
-                e.stopPropagation(); // Stop click from triggering other things
+                e.stopPropagation(); 
                 const visitId = snoozeBtn.dataset.id;
                 const visits = App.DB.get('visits');
                 const visitIndex = visits.findIndex(v => v.id === visitId);
                 
                 if (visitIndex > -1) {
-                    // 1. Calculate Tomorrow's Date (keep same time, usually 09:00)
                     const tomorrow = new Date();
                     tomorrow.setDate(tomorrow.getDate() + 1);
-                    // Format to ISO string part YYYY-MM-DD
                     const tomorrowStr = tomorrow.toISOString().slice(0, 10);
-                    
-                    // 2. Update Visit
-                    // Preserve original time if possible, otherwise default to T09:00:00.000Z
                     const originalTime = visits[visitIndex].dateTime.split('T')[1] || '09:00:00.000Z';
                     visits[visitIndex].dateTime = `${tomorrowStr}T${originalTime}`;
-                    visits[visitIndex].status = 'Scheduled'; // Reset status if it was 'Overdue'
-                    
-                    // 3. Save & Notify
+                    visits[visitIndex].status = 'Scheduled'; 
                     App.DB.set('visits', visits);
                     App.Helpers.logChange('Rescheduled', 'Visit', `Snoozed to ${tomorrowStr}`);
                     App.UI.toast('Task moved to tomorrow.', 'info');
-                    this.render(); // Refresh the list immediately
+                    this.render();
                 }
             }
-            // --------------------
 
             if (taskItem && taskItem.dataset.customerId) {
                 App.Customers.showCustomerDetail(taskItem.dataset.customerId);
@@ -3258,31 +3270,46 @@ Object.assign(App.MyDay, {
         todayStart.setHours(0,0,0,0);
 
         // Render Today's Visits
-        const todaysVisits = allVisits.filter(v => v.dateTime.startsWith(today) && v.status === 'Scheduled');
+        // --- NEW: Filter includes 'In Progress' ---
+        const todaysVisits = allVisits.filter(v => 
+            v.dateTime.startsWith(today) && (v.status === 'Scheduled' || v.status === 'In Progress')
+        );
         const visitsListContainer = document.getElementById('myday-visits-list');
         
         if (todaysVisits.length > 0) {
-            visitsListContainer.innerHTML = todaysVisits.map(v => `
-                <div class="myday-task-item">
+            visitsListContainer.innerHTML = todaysVisits.map(v => {
+                let actionBtn = '';
+                
+                // --- NEW: Button Logic ---
+                if (v.status === 'Scheduled') {
+                    actionBtn = `
+                        <button class="btn btn-outline snooze-btn" data-id="${v.id}" title="Snooze" style="padding: 4px 8px; margin-right: 5px; color: #ffc107; border-color: #ffc107;"><i class="fas fa-clock"></i></button>
+                        <button class="btn btn-success start-visit-btn" data-id="${v.id}" title="Check In" style="padding: 4px 12px;"><i class="fas fa-play"></i> Start</button>
+                    `;
+                } else if (v.status === 'In Progress') {
+                    actionBtn = `
+                        <button class="btn btn-danger mark-done-btn" data-id="${v.id}" title="Check Out" style="padding: 4px 12px;"><i class="fas fa-stop"></i> End</button>
+                    `;
+                }
+                // -------------------------
+
+                return `
+                <div class="myday-task-item" style="${v.status === 'In Progress' ? 'background: rgba(16, 185, 129, 0.1); border-left: 4px solid #10b981; padding-left: 10px;' : ''}">
                     <div class="myday-task-info">
                         <span class="customer-name">${customerMap[v.customerId]?.companyName || 'N/A'}</span>
-                        <span class="task-details">${v.purpose}</span>
+                        <span class="task-details">
+                            ${v.status === 'In Progress' ? '<b style="color:#10b981;">IN PROGRESS</b>' : v.purpose}
+                        </span>
                     </div>
-                    <div class="d-flex gap-2">
-                        <button class="btn btn-outline snooze-btn" data-id="${v.id}" title="Snooze to Tomorrow" style="padding: 4px 8px; color: #ffc107; border-color: #ffc107;">
-                            <i class="fas fa-clock"></i>
-                        </button>
-                        <button class="btn btn-success mark-done-btn" data-id="${v.id}" title="Mark as Done">
-                            <i class="fas fa-check"></i> Done
-                        </button>
+                    <div class="d-flex align-items-center">
+                        ${actionBtn}
                     </div>
                 </div>
-            `).join('');
+            `}).join('');
         } else {
             visitsListContainer.innerHTML = App.UI.getEmptyStateHTML('fa-check-circle', 'All Clear!', 'No visits scheduled for today.');
         }
 
-        // Render Promises Due
         const promisesDue = allVisits.filter(v => v.outcome === 'Promise to Pay' && v.promiseDate === today);
         const promisesListContainer = document.getElementById('myday-promises-list');
          if (promisesDue.length > 0) {
@@ -3299,7 +3326,6 @@ Object.assign(App.MyDay, {
             promisesListContainer.innerHTML = App.UI.getEmptyStateHTML('fa-calendar-check', 'No Follow-ups', 'No payment promises are due today.');
         }
         
-        // Render Overdue Tasks
         const overdueVisits = allVisits.filter(v => v.status === 'Overdue');
         const overduePromises = allVisits.filter(v => v.outcome === 'Promise to Pay' && v.promiseDate && new Date(v.promiseDate) < todayStart);
         const overdueListContainer = document.getElementById('myday-overdue-list');
@@ -3351,7 +3377,7 @@ Object.assign(App.MyDay, {
 
         this.map = L.map('myday-map-view').setView([25.2048, 55.2708], 10);
         L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-            attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
+            attribution: '© OpenStreetMap contributors © CARTO'
         }).addTo(this.map);
 
         if (visits.length === 0) {
@@ -3364,7 +3390,7 @@ Object.assign(App.MyDay, {
             return c && c.latitude && c.longitude;
         });
         
-        if(validVisits.length < 2) { // Not enough points for a route, just show markers
+        if(validVisits.length < 2) { 
              validVisits.forEach(visit => {
                 const customer = customerMap[visit.customerId];
                 const icon = App.Helpers.getCustomerMarkerIcon(customer);
@@ -3389,7 +3415,7 @@ Object.assign(App.MyDay, {
             waypoints: waypoints,
             routeWhileDragging: false,
             addWaypoints: false,
-            show: false, // Hide the turn-by-turn instructions
+            show: false, 
             lineOptions: {
                 styles: [{ color: 'var(--primary)', opacity: 0.8, weight: 6 }]
             },
@@ -3726,7 +3752,9 @@ Object.assign(App.Customers, {
     deleteCustomer(accountNo) { const customer = App.DB.get('customers').find(c => c.accountNo === accountNo); Swal.fire({ title: `Delete ${customer.companyName}?`, text: "This will permanently delete the customer and all their associated payments and visits. This action cannot be undone.", input: 'textarea', inputLabel: 'Reason for deletion', inputPlaceholder: 'Enter your reason here...', showCancelButton: true, confirmButtonText: 'Yes, delete it!', confirmButtonColor: 'var(--danger)', background: 'var(--card-bg)', color: 'var(--text-primary)', inputValidator: (value) => { if (!value) { return 'You must provide a reason for deletion!' } } }).then(result => { if (result.isConfirmed && result.value) { let customers = App.DB.get('customers'); let visits = App.DB.get('visits'); let payments = App.DB.get('payments'); let comments = App.DB.get('customerComments'); App.DB.set('customers', customers.filter(c => c.accountNo !== accountNo)); App.DB.set('visits', visits.filter(v => v.customerId !== accountNo)); App.DB.set('payments', payments.filter(p => p.customerId !== accountNo)); App.DB.set('customerComments', comments.filter(c => c.accountNo !== accountNo)); App.Helpers.logChange('Deleted', 'Customer', `${customer.companyName} (${accountNo})`, `Reason: ${result.value}`); App.UI.toast('Customer deleted permanently.', 'success'); this.render(); } }); } 
 });
 
-Object.assign(App.Visits, { calendar: null, logNotesQuill: null, map: null, 
+Object.assign(App.Visits, { 
+    calendar: null, logNotesQuill: null, map: null, 
+
     setupEventListeners: function() { 
         document.getElementById('visit-notes-form').addEventListener('submit', e => this.saveCompletedVisit(e)); 
         document.getElementById('visit-form').addEventListener('submit', (e) => this.saveScheduledVisit(e)); 
@@ -3738,6 +3766,7 @@ Object.assign(App.Visits, { calendar: null, logNotesQuill: null, map: null,
             const button = e.target.closest('button'); 
             if (!button) return; 
 
+            if (button.classList.contains('start-visit-btn')) this.checkIn(button.dataset.id); 
             if (button.classList.contains('visit-view-tab')) this.switchView(button.dataset.view); 
             if (button.classList.contains('visit-filter-btn')) this.setFilter(button.dataset.filter); 
             if (button.id === 'visit-date-apply') this.applyDateFilter(); 
@@ -3753,208 +3782,233 @@ Object.assign(App.Visits, { calendar: null, logNotesQuill: null, map: null,
             if (button.id === 'export-visits-pdf') App.Helpers.exportTableData('pdf', 'Visits', this.getCurrentFilteredData, ['dateTime', 'customerId', 'purpose', 'collectorId', 'status']);
         }); 
     
-    document.getElementById('visit-search').addEventListener('input', (e) => { App.state.visits.search = e.target.value; debouncedRender(); });
-    document.getElementById('visit-consultant-filter').addEventListener('change', (e) => { App.state.pagination.visits.currentPage = 1; App.state.visits.consultantFilter = e.target.value; this.renderListView(); });
-    document.getElementById('map-consultant-filter').addEventListener('change', (e) => { App.state.visits.mapConsultant = e.target.value; this.renderMapView(); });
-    document.getElementById('map-date-filter').addEventListener('change', (e) => { App.state.visits.mapDate = e.target.value; this.renderMapView(); });
-    document.querySelector('#visits-page .data-table thead').addEventListener('click', (e) => { const th = e.target.closest('th'); if (th && th.dataset.sort) App.UI.handleTableSort('visits', th.dataset.sort); });
-    document.getElementById('route-planner-form').addEventListener('submit', (e) => this.generateRoute(e));
-    
-    const visitNotesModal = document.getElementById('visit-notes-modal');
-    visitNotesModal.addEventListener('click', e => { 
-        const button = e.target.closest('button');
-        if (!button) return;
-        if (button.id === 'log-location-btn') this.tagLocationForVisitLog(); 
-        if (button.id === 'log-record-payment-btn') {
-            const visitId = document.getElementById('mark-done-visit-id').value;
-            const visit = App.DB.get('visits').find(v => v.id === visitId);
-            if (visit) {
-                App.state.paymentFlowOrigin = { visitId: visit.id, paymentLogged: false };
-                App.Payments.showPaymentForm(visit.customerId);
-            }
-        }
-    }); 
-    visitNotesModal.addEventListener('change', e => {
-        if (e.target.id === 'log-outcome') {
-            document.getElementById('promise-to-pay-fields').classList.toggle('hidden', e.target.value !== 'Promise to Pay');
-        }
-    });
-}, 
-setQuickDate(period) {
-    const date = new Date();
-    if(period === 'tomorrow') date.setDate(date.getDate() + 1);
-    const yyyy = date.getFullYear();    
-    const mm = String(date.getMonth() + 1).padStart(2, '0');
-    const dd = String(date.getDate()).padStart(2, '0');
-    document.getElementById('visit-start-date').value = `${yyyy}-${mm}-${dd}`;
-    document.getElementById('visit-end-date').value = `${yyyy}-${mm}-${dd}`;
-},
-getCurrentFilteredData: function() {
-    let visits = App.Helpers.getScopedData('visits'); 
-    const { filter, startDate, endDate, search, consultantFilter } = App.state.visits; 
-    const today = new Date().setHours(0, 0, 0, 0); 
-    const customerMap = App.DB.get('customers').reduce((map, c) => {map[c.accountNo] = c.companyName; return map;}, {});
-
-    if (search) {
-        const lowerSearch = search.toLowerCase();
-        visits = visits.filter(v => 
-            (customerMap[v.customerId] || '').toLowerCase().includes(lowerSearch) ||
-            (v.purpose || '').toLowerCase().includes(lowerSearch)
-        );
-    }
-
-    if (consultantFilter !== 'all') {
-        visits = visits.filter(v => v.collectorId == consultantFilter);
-    }
-
-    if (filter !== 'All' && !(startDate && endDate)) { visits = visits.filter(v => { const visitDate = new Date(v.dateTime).setHours(0, 0, 0, 0); if (filter === 'Overdue') return (v.status === 'Scheduled' || v.status === 'Overdue') && visitDate < today; if (filter === 'Today') return visitDate === today; if (filter === 'Upcoming') return v.status === 'Scheduled' && visitDate >= today; return false; }); } 
-    if (startDate && endDate) { visits = visits.filter(v => { const visitDateOnly = new Date(v.dateTime).toISOString().slice(0, 10); return visitDateOnly >= startDate && visitDateOnly <= endDate; }); }
-    
-    const { column, order } = App.state.tableSorts.visits;
-    const consultants = App.DB.get('consultants').reduce((map, c) => { map[c.id] = c.name; return map; }, {});
-
-    visits.sort((a, b) => {
-        let valA, valB;
-        if (column === 'customerId') { valA = customerMap[a.customerId] || ''; valB = customerMap[b.customerId] || ''; } 
-        else if (column === 'collectorId') { valA = consultants[a.collectorId] || ''; valB = consultants[b.collectorId] || ''; } 
-        else { valA = a[column]; valB = b[column]; }
-
-        if (typeof valA === 'string') { valA = valA.toLowerCase(); valB = valB.toLowerCase(); }
-        if (valA < valB) return order === 'asc' ? -1 : 1;
-        if (valA > valB) return order === 'asc' ? 1 : -1;
-        return 0;
-    });
-
-    return visits;
-},
-render: function() { 
-    this.checkOverdueVisits();
-    
-    const allVisits = App.DB.get('visits');
-    const todayStr = new Date().toISOString().slice(0,10);
-    App.Dashboard.animateCounter('visit-kpi-upcoming', allVisits.filter(v => v.status === 'Scheduled' && new Date(v.dateTime) >= new Date()).length);
-    App.Dashboard.animateCounter('visit-kpi-overdue', allVisits.filter(v => v.status === 'Overdue').length);
-    App.Dashboard.animateCounter('visit-kpi-completed-today', allVisits.filter(v => v.status === 'Completed' && v.dateTime.startsWith(todayStr)).length);
-    
-    const consultantFilter = document.getElementById('visit-consultant-filter');
-    consultantFilter.innerHTML = '<option value="all">All Consultants</option>' + App.DB.get('consultants').map(c => `<option value="${c.id}">${c.name}</option>`).join('');
-    consultantFilter.value = App.state.visits.consultantFilter;
-
-    const headerActions = document.getElementById('visits-header-actions');
-    headerActions.innerHTML = `
-        <div data-role="admin" class="d-flex gap-2">
-            <button class="btn btn-outline" id="export-visits-csv"><i class="fas fa-file-csv"></i> CSV</button>
-            <button class="btn btn-outline" id="export-visits-pdf"><i class="fas fa-file-pdf"></i> PDF</button>
-        </div>
-        <button class="btn btn-outline" id="plan-route-btn"><i class="fas fa-route"></i> Plan Route</button>
-        <button class="btn btn-primary" id="schedule-visit-btn"><i class="fas fa-plus"></i> Schedule a Visit</button>
-    `;
-
-    if (App.state.visits.activeView === 'list') this.renderListView(); 
-    else if (App.state.visits.activeView === 'calendar') this.renderCalendarView();
-    else if (App.state.visits.activeView === 'map') this.renderMapView();
-
-    document.getElementById('plan-route-btn').style.display = App.state.visits.activeView === 'map' ? 'inline-flex' : 'none';
-}, 
-switchView: function(view) { 
-    App.state.visits.activeView = view; 
-    document.querySelectorAll('.visit-view-tab').forEach(t => t.classList.remove('active')); 
-    document.querySelector(`.visit-view-tab[data-view="${view}"]`).classList.add('active'); 
-    document.querySelectorAll('.visit-view-content').forEach(c => c.classList.add('hidden')); 
-    document.getElementById(`${view}-view-content`).classList.remove('hidden'); 
-    
-    document.getElementById('list-view-controls').style.display = view === 'list' ? 'flex' : 'none';
-    document.getElementById('map-view-controls').classList.toggle('hidden', view !== 'map');
-    document.getElementById('map-view-controls').style.display = view === 'map' ? 'flex' : 'none';
-    
-    this.render(); 
-}, 
-setFilter: function(filter) { App.state.visits.filter = filter; App.state.pagination.visits.currentPage = 1; document.getElementById('visit-start-date').value = ''; document.getElementById('visit-end-date').value = ''; App.state.visits.startDate = ''; App.state.visits.endDate = ''; document.querySelectorAll('.visit-filter-btn').forEach(b => b.classList.remove('active')); document.querySelector(`.visit-filter-btn[data-filter="${filter}"]`).classList.add('active'); this.renderListView(); }, 
-applyDateFilter: function() { const startDate = document.getElementById('visit-start-date').value; const endDate = document.getElementById('visit-end-date').value; if (!startDate || !endDate) { App.UI.toast('Please select both a start and end date.', 'warning'); return; } App.state.pagination.visits.currentPage = 1; App.state.visits.startDate = startDate; App.state.visits.endDate = endDate; App.state.visits.filter = 'Custom'; document.querySelectorAll('.visit-filter-btn').forEach(b => b.classList.remove('active')); this.renderListView(); }, 
-renderListView: function() { 
-    const isAdmin = App.state.currentUser.role === 'admin';
-    let headers = [
-        { text: 'Date', sortKey: 'dateTime' },
-        { text: 'Customer', sortKey: 'customerId' },
-        { text: 'Purpose', sortKey: 'purpose' }
-    ];
-    if (isAdmin) {
-        headers.push({ text: 'Consultant', sortKey: 'collectorId' });
-    }
-    headers.push({ text: 'Status', sortKey: 'status' }, { text: 'Actions', sortKey: null });
-
-    const thead = document.querySelector('#visits-page .data-table thead');
-    thead.innerHTML = `<tr>${headers.map(h => `<th ${h.sortKey ? `data-sort="${h.sortKey}"` : ''}>${h.text}</th>`).join('')}</tr>`;
-
-    const visits = this.getCurrentFilteredData();
-    const { currentPage, rowsPerPage } = App.state.pagination.visits;
-    const startIndex = (currentPage - 1) * rowsPerPage;
-    const paginatedVisits = visits.slice(startIndex, startIndex + rowsPerPage);
-    
-    const customers = App.DB.get('customers'); 
-    const consultantMap = App.DB.get('consultants').reduce((map, c) => { map[c.id] = c.name; return map; }, {});
-    const tbody = document.getElementById('visit-table-body'); 
-    if (paginatedVisits.length > 0) {
-        tbody.innerHTML = paginatedVisits.map(v => { 
-            const consultantCell = isAdmin ? `<td>${consultantMap[v.collectorId] || 'N/A'}</td>` : '';
-            
-            const actions = [];
-            const isPending = v.status === 'Scheduled' || v.status === 'Overdue';
-            
-            if (isPending) {
-                if (isAdmin) {
-                    actions.push(`<button class="btn btn-outline view-visit-btn" data-id="${v.id}" title="View Details"><i class="fas fa-eye"></i></button>`);
-                } else {
-                    actions.push(`<button class="btn btn-success mark-done-btn" data-id="${v.id}" title="Mark as Done"><i class="fas fa-check"></i></button>`);
+        document.getElementById('visit-search').addEventListener('input', (e) => { App.state.visits.search = e.target.value; debouncedRender(); });
+        document.getElementById('visit-consultant-filter').addEventListener('change', (e) => { App.state.pagination.visits.currentPage = 1; App.state.visits.consultantFilter = e.target.value; this.renderListView(); });
+        document.getElementById('map-consultant-filter').addEventListener('change', (e) => { App.state.visits.mapConsultant = e.target.value; this.renderMapView(); });
+        document.getElementById('map-date-filter').addEventListener('change', (e) => { App.state.visits.mapDate = e.target.value; this.renderMapView(); });
+        document.querySelector('#visits-page .data-table thead').addEventListener('click', (e) => { const th = e.target.closest('th'); if (th && th.dataset.sort) App.UI.handleTableSort('visits', th.dataset.sort); });
+        document.getElementById('route-planner-form').addEventListener('submit', (e) => this.generateRoute(e));
+        
+        const visitNotesModal = document.getElementById('visit-notes-modal');
+        visitNotesModal.addEventListener('click', e => { 
+            const button = e.target.closest('button');
+            if (!button) return;
+            if (button.id === 'log-location-btn') this.tagLocationForVisitLog(); 
+            if (button.id === 'log-record-payment-btn') {
+                const visitId = document.getElementById('mark-done-visit-id').value;
+                const visit = App.DB.get('visits').find(v => v.id === visitId);
+                if (visit) {
+                    App.state.paymentFlowOrigin = { visitId: visit.id, paymentLogged: false };
+                    App.Payments.showPaymentForm(visit.customerId);
                 }
-            } else if (v.status === 'Completed') {
-                actions.push(`<button class="btn btn-outline view-visit-btn" data-id="${v.id}" title="View Details"><i class="fas fa-eye"></i></button>`);
             }
+        }); 
+        visitNotesModal.addEventListener('change', e => {
+            if (e.target.id === 'log-outcome') {
+                document.getElementById('promise-to-pay-fields').classList.toggle('hidden', e.target.value !== 'Promise to Pay');
+            }
+        });
+    }, 
 
-            if (isAdmin) {
-                actions.push(`<button class="btn btn-danger delete-visit" data-id="${v.id}" title="Delete"><i class="fas fa-trash"></i></button>`);
-            }
+    checkIn(visitId) {
+        let visits = App.DB.get('visits');
+        const index = visits.findIndex(v => v.id === visitId);
+        if (index > -1) {
+            visits[index].status = 'In Progress';
+            visits[index].checkInTime = Date.now(); 
+            App.DB.set('visits', visits);
             
-            return `<tr><td>${App.Helpers.formatDateTime(v.dateTime)}</td><td>${customers.find(c => c.accountNo === v.customerId)?.companyName || 'N/A'}</td><td>${v.purpose}</td>${consultantCell}<td><span class="status-badge ${v.status.toLowerCase()}">${v.status}</span></td><td><div class="d-flex gap-2">${actions.join('')}</div></td></tr>`; 
-        }).join('');
-    } else {
-        const buttonHTML = `<button class="btn btn-primary" onclick="App.Visits.showScheduleModal()"><i class="fas fa-plus"></i> Schedule a Visit</button>`;
-        tbody.innerHTML = `<tr><td colspan="100%">${App.UI.getEmptyStateHTML('fa-calendar-times', 'No Visits Found', 'Try adjusting your filters or schedule a new visit.', buttonHTML)}</td></tr>`;
-    }
-    App.UI.animateTableRows(tbody);
-    App.UI.renderPaginationControls('visits', visits.length);
-    App.UI.updateSortIndicators('visits');
-}, 
-renderCalendarView: function() { const el = document.getElementById('calendar-view'); if (this.calendar) this.calendar.destroy(); const v = App.Helpers.getScopedData('visits'), c = App.DB.get('customers'); const ev = v.map(i => ({ id: i.id, title: `${c.find(cu => cu.accountNo === i.customerId)?.companyName || 'N/A'} - ${i.purpose}`, start: i.dateTime, backgroundColor: i.status === 'Completed' ? 'var(--success)' : i.status === 'Overdue' ? 'var(--danger)' : 'var(--primary)' })); this.calendar = new FullCalendar.Calendar(el, { initialView: 'dayGridMonth', headerToolbar: { left: 'prev,next today', center: 'title', right: 'dayGridMonth,timeGridWeek,listWeek' }, events: ev, editable: true, dateClick: (info) => this.showScheduleModal(null, info.dateStr), eventClick: (info) => this.showScheduleModal(info.event.id) }); this.calendar.render(); }, 
+            // --- NEW: Log Activity for Check-In ---
+            App.Helpers.logActivity(
+                'Started Visit', 
+                'Check-In recorded.', 
+                visits[index].customerId, 
+                null, 
+                visitId
+            );
+            // -------------------------------------
 
-renderMapView: function() {
+            App.UI.toast('Visit Started! Clock is ticking... ⏱️');
+            this.render();
+            if (App.state.activePage === 'myday') App.MyDay.render();
+        }
+    },
+
+    setQuickDate(period) {
+        const date = new Date();
+        if(period === 'tomorrow') date.setDate(date.getDate() + 1);
+        const yyyy = date.getFullYear();    
+        const mm = String(date.getMonth() + 1).padStart(2, '0');
+        const dd = String(date.getDate()).padStart(2, '0');
+        document.getElementById('visit-start-date').value = `${yyyy}-${mm}-${dd}`;
+        document.getElementById('visit-end-date').value = `${yyyy}-${mm}-${dd}`;
+    },
+    getCurrentFilteredData: function() {
+        let visits = App.Helpers.getScopedData('visits'); 
+        const { filter, startDate, endDate, search, consultantFilter } = App.state.visits; 
+        const today = new Date().setHours(0, 0, 0, 0); 
+        const customerMap = App.DB.get('customers').reduce((map, c) => {map[c.accountNo] = c.companyName; return map;}, {});
+
+        if (search) {
+            const lowerSearch = search.toLowerCase();
+            visits = visits.filter(v => 
+                (customerMap[v.customerId] || '').toLowerCase().includes(lowerSearch) ||
+                (v.purpose || '').toLowerCase().includes(lowerSearch)
+            );
+        }
+
+        if (consultantFilter !== 'all') {
+            visits = visits.filter(v => v.collectorId == consultantFilter);
+        }
+
+        if (filter !== 'All' && !(startDate && endDate)) { 
+            visits = visits.filter(v => { 
+                const visitDate = new Date(v.dateTime).setHours(0, 0, 0, 0); 
+                if (filter === 'Overdue') return (v.status === 'Scheduled' || v.status === 'Overdue') && visitDate < today; 
+                if (filter === 'Today') return visitDate === today; 
+                if (filter === 'Upcoming') return (v.status === 'Scheduled' || v.status === 'In Progress') && visitDate >= today; 
+                return false; 
+            }); 
+        } 
+        if (startDate && endDate) { visits = visits.filter(v => { const visitDateOnly = new Date(v.dateTime).toISOString().slice(0, 10); return visitDateOnly >= startDate && visitDateOnly <= endDate; }); }
+        
+        const { column, order } = App.state.tableSorts.visits;
+        const consultants = App.DB.get('consultants').reduce((map, c) => { map[c.id] = c.name; return map; }, {});
+
+        visits.sort((a, b) => {
+            let valA, valB;
+            if (column === 'customerId') { valA = customerMap[a.customerId] || ''; valB = customerMap[b.customerId] || ''; } 
+            else if (column === 'collectorId') { valA = consultants[a.collectorId] || ''; valB = consultants[b.collectorId] || ''; } 
+            else { valA = a[column]; valB = b[column]; }
+
+            if (typeof valA === 'string') { valA = valA.toLowerCase(); valB = valB.toLowerCase(); }
+            if (valA < valB) return order === 'asc' ? -1 : 1;
+            if (valA > valB) return order === 'asc' ? 1 : -1;
+            return 0;
+        });
+
+        return visits;
+    },
+    render: function() { 
+        this.checkOverdueVisits();
+        
+        const allVisits = App.DB.get('visits');
+        const todayStr = new Date().toISOString().slice(0,10);
+        App.Dashboard.animateCounter('visit-kpi-upcoming', allVisits.filter(v => (v.status === 'Scheduled' || v.status === 'In Progress') && new Date(v.dateTime) >= new Date()).length);
+        App.Dashboard.animateCounter('visit-kpi-overdue', allVisits.filter(v => v.status === 'Overdue').length);
+        App.Dashboard.animateCounter('visit-kpi-completed-today', allVisits.filter(v => v.status === 'Completed' && v.dateTime.startsWith(todayStr)).length);
+        
+        const consultantFilter = document.getElementById('visit-consultant-filter');
+        consultantFilter.innerHTML = '<option value="all">All Consultants</option>' + App.DB.get('consultants').map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+        consultantFilter.value = App.state.visits.consultantFilter;
+
+        const headerActions = document.getElementById('visits-header-actions');
+        headerActions.innerHTML = `
+            <div data-role="admin" class="d-flex gap-2">
+                <button class="btn btn-outline" id="export-visits-csv"><i class="fas fa-file-csv"></i> CSV</button>
+                <button class="btn btn-outline" id="export-visits-pdf"><i class="fas fa-file-pdf"></i> PDF</button>
+            </div>
+            <button class="btn btn-outline" id="plan-route-btn"><i class="fas fa-route"></i> Plan Route</button>
+            <button class="btn btn-primary" id="schedule-visit-btn"><i class="fas fa-plus"></i> Schedule a Visit</button>
+        `;
+
+        if (App.state.visits.activeView === 'list') this.renderListView(); 
+        else if (App.state.visits.activeView === 'calendar') this.renderCalendarView();
+        else if (App.state.visits.activeView === 'map') this.renderMapView();
+
+        document.getElementById('plan-route-btn').style.display = App.state.visits.activeView === 'map' ? 'inline-flex' : 'none';
+    }, 
+    switchView: function(view) { 
+        App.state.visits.activeView = view; 
+        document.querySelectorAll('.visit-view-tab').forEach(t => t.classList.remove('active')); 
+        document.querySelector(`.visit-view-tab[data-view="${view}"]`).classList.add('active'); 
+        document.querySelectorAll('.visit-view-content').forEach(c => c.classList.add('hidden')); 
+        document.getElementById(`${view}-view-content`).classList.remove('hidden'); 
+        
+        document.getElementById('list-view-controls').style.display = view === 'list' ? 'flex' : 'none';
+        document.getElementById('map-view-controls').classList.toggle('hidden', view !== 'map');
+        document.getElementById('map-view-controls').style.display = view === 'map' ? 'flex' : 'none';
+        
+        this.render(); 
+    }, 
+    setFilter: function(filter) { App.state.visits.filter = filter; App.state.pagination.visits.currentPage = 1; document.getElementById('visit-start-date').value = ''; document.getElementById('visit-end-date').value = ''; App.state.visits.startDate = ''; App.state.visits.endDate = ''; document.querySelectorAll('.visit-filter-btn').forEach(b => b.classList.remove('active')); document.querySelector(`.visit-filter-btn[data-filter="${filter}"]`).classList.add('active'); this.renderListView(); }, 
+    applyDateFilter: function() { const startDate = document.getElementById('visit-start-date').value; const endDate = document.getElementById('visit-end-date').value; if (!startDate || !endDate) { App.UI.toast('Please select both a start and end date.', 'warning'); return; } App.state.pagination.visits.currentPage = 1; App.state.visits.startDate = startDate; App.state.visits.endDate = endDate; App.state.visits.filter = 'Custom'; document.querySelectorAll('.visit-filter-btn').forEach(b => b.classList.remove('active')); this.renderListView(); }, 
+    renderListView: function() { 
+        const isAdmin = App.state.currentUser.role === 'admin';
+        let headers = [
+            { text: 'Date', sortKey: 'dateTime' },
+            { text: 'Customer', sortKey: 'customerId' },
+            { text: 'Purpose', sortKey: 'purpose' }
+        ];
+        if (isAdmin) {
+            headers.push({ text: 'Consultant', sortKey: 'collectorId' });
+        }
+        headers.push({ text: 'Status', sortKey: 'status' }, { text: 'Actions', sortKey: null });
+
+        const thead = document.querySelector('#visits-page .data-table thead');
+        thead.innerHTML = `<tr>${headers.map(h => `<th ${h.sortKey ? `data-sort="${h.sortKey}"` : ''}>${h.text}</th>`).join('')}</tr>`;
+
+        const visits = this.getCurrentFilteredData();
+        const { currentPage, rowsPerPage } = App.state.pagination.visits;
+        const startIndex = (currentPage - 1) * rowsPerPage;
+        const paginatedVisits = visits.slice(startIndex, startIndex + rowsPerPage);
+        
+        const customers = App.DB.get('customers'); 
+        const consultantMap = App.DB.get('consultants').reduce((map, c) => { map[c.id] = c.name; return map; }, {});
+        const tbody = document.getElementById('visit-table-body'); 
+        if (paginatedVisits.length > 0) {
+            tbody.innerHTML = paginatedVisits.map(v => { 
+                const consultantCell = isAdmin ? `<td>${consultantMap[v.collectorId] || 'N/A'}</td>` : '';
+                
+                const actions = [];
+                if (v.status === 'Scheduled' || v.status === 'Overdue') {
+                    if (isAdmin) {
+                        actions.push(`<button class="btn btn-outline view-visit-btn" data-id="${v.id}" title="View Details"><i class="fas fa-eye"></i></button>`);
+                    } else {
+                        actions.push(`<button class="btn btn-success start-visit-btn" data-id="${v.id}" title="Start Visit"><i class="fas fa-play"></i> Start</button>`);
+                    }
+                } else if (v.status === 'In Progress') {
+                    actions.push(`<button class="btn btn-danger mark-done-btn" data-id="${v.id}" title="End Visit"><i class="fas fa-stop"></i> End</button>`);
+                } else if (v.status === 'Completed') {
+                    actions.push(`<button class="btn btn-outline view-visit-btn" data-id="${v.id}" title="View Details"><i class="fas fa-eye"></i></button>`);
+                }
+
+                if (isAdmin) {
+                    actions.push(`<button class="btn btn-danger delete-visit" data-id="${v.id}" title="Delete"><i class="fas fa-trash"></i></button>`);
+                }
+                
+                return `<tr><td>${App.Helpers.formatDateTime(v.dateTime)}</td><td>${customers.find(c => c.accountNo === v.customerId)?.companyName || 'N/A'}</td><td>${v.purpose}</td>${consultantCell}<td><span class="status-badge ${v.status.toLowerCase().replace(' ','-')}">${v.status}</span></td><td><div class="d-flex gap-2">${actions.join('')}</div></td></tr>`; 
+            }).join('');
+        } else {
+            const buttonHTML = `<button class="btn btn-primary" onclick="App.Visits.showScheduleModal()"><i class="fas fa-plus"></i> Schedule a Visit</button>`;
+            tbody.innerHTML = `<tr><td colspan="100%">${App.UI.getEmptyStateHTML('fa-calendar-times', 'No Visits Found', 'Try adjusting your filters or schedule a new visit.', buttonHTML)}</td></tr>`;
+        }
+        App.UI.animateTableRows(tbody);
+        App.UI.renderPaginationControls('visits', visits.length);
+        App.UI.updateSortIndicators('visits');
+    }, 
+    renderCalendarView: function() { const el = document.getElementById('calendar-view'); if (this.calendar) this.calendar.destroy(); const v = App.Helpers.getScopedData('visits'), c = App.DB.get('customers'); const ev = v.map(i => ({ id: i.id, title: `${c.find(cu => cu.accountNo === i.customerId)?.companyName || 'N/A'} - ${i.purpose}`, start: i.dateTime, backgroundColor: i.status === 'Completed' ? 'var(--success)' : i.status === 'Overdue' ? 'var(--danger)' : 'var(--primary)' })); this.calendar = new FullCalendar.Calendar(el, { initialView: 'dayGridMonth', headerToolbar: { left: 'prev,next today', center: 'title', right: 'dayGridMonth,timeGridWeek,listWeek' }, events: ev, editable: true, dateClick: (info) => this.showScheduleModal(null, info.dateStr), eventClick: (info) => this.showScheduleModal(info.event.id) }); this.calendar.render(); }, 
+    renderMapView: function() {
         const mapContainer = document.getElementById('map-view');
         if (!mapContainer) return;
 
-        // --- NEW: Toggle route controls ---
         const hasRoute = !!App.state.visits.plannedRoute;
         const clearBtn = document.getElementById('clear-route-btn');
         clearBtn.classList.toggle('hidden', !hasRoute);
 
-        // Add "Start Navigation" button dynamically if not exists
         let navBtn = document.getElementById('start-nav-btn');
         if (!navBtn && hasRoute) {
-            // Create the button
             navBtn = document.createElement('button');
             navBtn.id = 'start-nav-btn';
             navBtn.className = 'btn btn-success';
             navBtn.innerHTML = '<i class="fas fa-location-arrow"></i> Start Navigation';
             navBtn.style.marginLeft = '10px';
             navBtn.onclick = () => this.exportRouteToGoogleMaps();
-            
-            // Append next to clear button
             clearBtn.parentNode.insertBefore(navBtn, clearBtn.nextSibling);
         } else if (navBtn && !hasRoute) {
             navBtn.remove();
         }
-        // ----------------------------------
 
-        // Setup Filters
         const isAdmin = App.state.currentUser.role === 'admin';
         const consultantFilterEl = document.getElementById('map-consultant-filter');
         const dateFilterEl = document.getElementById('map-date-filter');
@@ -3965,17 +4019,14 @@ renderMapView: function() {
         }
         dateFilterEl.value = App.state.visits.mapDate;
 
-        // Reset Map
         if (this.map) {
             this.map.remove();
             this.map = null;
         }
         
-        // Initialize Map
         const cartoVoyager = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', { attribution: '© CARTO', maxZoom: 19 });
         this.map = L.map('map-view', { center: [25.2048, 55.2708], zoom: 11, layers: [cartoVoyager] });
 
-        // Load Data
         let customersToDisplay = App.Helpers.getScopedData('customers', isAdmin ? (App.state.visits.mapConsultant === 'all' ? null : App.state.visits.mapConsultant) : App.state.currentUser.assignedConsultantId);
         
         const markers = L.markerClusterGroup();
@@ -3989,166 +4040,130 @@ renderMapView: function() {
         this.map.addLayer(markers);
 
         if (markers.getLayers().length > 0) this.map.fitBounds(markers.getBounds().pad(0.1));
-        
         if (hasRoute) this.drawPlannedRoute();
     },
-
-    // --- NEW HELPER FUNCTION ---
     exportRouteToGoogleMaps() {
         const routeIds = App.state.visits.plannedRoute;
         if (!routeIds || routeIds.length < 1) return;
-
         const customerMap = App.DB.get('customers').reduce((map, c) => { map[c.accountNo] = c; return map; }, {});
-        
-        // 1. Get coordinates for all stops
         const waypoints = routeIds
             .map(id => customerMap[id])
             .filter(c => c && c.latitude && c.longitude)
             .map(c => `${c.latitude},${c.longitude}`);
-
         if (waypoints.length === 0) return App.UI.toast('No valid GPS coordinates in route.', 'error');
-
-        // 2. Build URL: https://www.google.com/maps/dir/Current+Location/Stop1/Stop2/...
-        // "Current+Location" tells Google Maps to start from where the driver is right now.
         const baseUrl = "https://www.google.com/maps/dir/Current+Location/";
         const destinationString = waypoints.join("/");
         const finalUrl = baseUrl + destinationString;
-
-        // 3. Open
         window.open(finalUrl, '_blank');
     },
+    showScheduleModal: function(id = null, d = null, customerId = null) { 
+        const f = document.getElementById('visit-form'); 
+        f.reset(); 
+        f.elements['visit-id'].value = ''; 
+        const dateInput = f.elements['visit-date'];
 
-showScheduleModal: function(id = null, d = null, customerId = null) { 
-    const f = document.getElementById('visit-form'); 
-    f.reset(); 
-    f.elements['visit-id'].value = ''; 
-    const dateInput = f.elements['visit-date'];
+        const container = document.getElementById('visit-customer-select-container');
+        const consultantMap = App.DB.get('consultants').reduce((map, c) => { map[c.id] = c.name; return map; }, {});
+        const customers = App.Helpers.getScopedData('customers').map(c => ({
+            id: c.accountNo, 
+            mainText: `${c.companyName}`,
+            secondaryText: `${c.accountNo}  |  ${consultantMap[c.salesConsultantId] || 'Unassigned'}`
+        }));
+        const dropdown = App.UI.createSearchableDropdown(container, customers, null, 'Search by Name, Account #, or Consultant...');
 
-    const container = document.getElementById('visit-customer-select-container');
-    const consultantMap = App.DB.get('consultants').reduce((map, c) => { map[c.id] = c.name; return map; }, {});
-    const customers = App.Helpers.getScopedData('customers').map(c => ({
-        id: c.accountNo, 
-        mainText: `${c.companyName}`,
-        secondaryText: `${c.accountNo}  |  ${consultantMap[c.salesConsultantId] || 'Unassigned'}`
-    }));
-    const dropdown = App.UI.createSearchableDropdown(container, customers, null, 'Search by Name, Account #, or Consultant...');
+        if (id) { 
+            const visit = App.DB.get('visits').find(v => v.id === id); 
+            if (visit) { 
+                f.elements['visit-id'].value = visit.id; 
+                dropdown.setValue(visit.customerId);
+                f.elements['visit-purpose'].value = visit.purpose; 
+                const visitDateObj = new Date(visit.dateTime);
+                const localIso = new Date(visitDateObj.getTime() - (visitDateObj.getTimezoneOffset() * 60000)).toISOString().slice(0, 16);
+                dateInput.value = localIso; 
+            } 
+        } else if (d) { 
+            dateInput.value = `${d}T09:00`;
+        } else {
+            const now = new Date();
+            now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+            dateInput.value = now.toISOString().slice(0, 16);
+        }
 
-    if (id) { 
-        const visit = App.DB.get('visits').find(v => v.id === id); 
-        if (visit) { 
-            f.elements['visit-id'].value = visit.id; 
-            dropdown.setValue(visit.customerId);
-            f.elements['visit-purpose'].value = visit.purpose; 
-            // Convert stored UTC ISO string to local datetime string for input
-            const visitDateObj = new Date(visit.dateTime);
-            const localIso = new Date(visitDateObj.getTime() - (visitDateObj.getTimezoneOffset() * 60000)).toISOString().slice(0, 16);
-            dateInput.value = localIso; 
+        if (customerId) {
+            dropdown.setValue(customerId);
+        }
+        App.UI.openModal('visit-modal'); 
+    }, 
+    saveScheduledVisit: function(e) { 
+        e.preventDefault(); 
+        const f = e.target; 
+        const customerId = document.querySelector('#visit-customer-select-container input[type="hidden"]').value; 
+        if(!customerId) return App.UI.toast('Please select a customer.', 'error'); 
+        const customer = App.DB.get('customers').find(c => c.accountNo === customerId); 
+        
+        const visitDateTimeVal = f.elements['visit-date'].value; 
+        if (!visitDateTimeVal) return App.UI.toast('Please select date and time', 'error');
+        
+        const visitDateTimeISO = new Date(visitDateTimeVal).toISOString();
+        
+        const vd = { 
+            customerId: customerId, 
+            purpose: f.elements['visit-purpose'].value, 
+            dateTime: visitDateTimeISO, 
+            status: 'Scheduled', 
+            collectorId: customer ? customer.salesConsultantId : null 
+        }; 
+        let v = App.DB.get('visits'), id = f.elements['visit-id'].value; 
+        if (id) { 
+            const i = v.findIndex(vi => vi.id === id);
+            const original = v[i];
+            const changes = App.Helpers.getObjectChanges(original, {...original, ...vd});
+            v[i] = { ...v[i], ...vd, id: id }; 
+            App.Helpers.logChange('Updated', 'Visit', `For ${customer.companyName}`, changes); 
+        } else { 
+            vd.id = `visit-${Date.now()}`; 
+            v.push(vd);
+            App.Helpers.logChange('Scheduled', 'Visit', `For ${customer.companyName}`); 
         } 
-    } else if (d) { 
-        // d is YYYY-MM-DD from calendar click, default to 09:00
-        dateInput.value = `${d}T09:00`;
-    } else {
-        // Default to current local time if nothing selected
-        const now = new Date();
-        now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
-        dateInput.value = now.toISOString().slice(0, 16);
-    }
-
-    if (customerId) {
-        dropdown.setValue(customerId);
-    }
-    App.UI.openModal('visit-modal'); 
-}, 
-saveScheduledVisit: function(e) { 
-    e.preventDefault(); 
-    const f = e.target; 
-    const customerId = document.querySelector('#visit-customer-select-container input[type="hidden"]').value; 
-    if(!customerId) return App.UI.toast('Please select a customer.', 'error'); 
-    const customer = App.DB.get('customers').find(c => c.accountNo === customerId); 
-    
-    const visitDateTimeVal = f.elements['visit-date'].value; // Value is YYYY-MM-DDTHH:MM
-    if (!visitDateTimeVal) return App.UI.toast('Please select date and time', 'error');
-    
-    // Convert local input to ISO string (UTC) for storage
-    const visitDateTimeISO = new Date(visitDateTimeVal).toISOString();
-    
-    const vd = { 
-        customerId: customerId, 
-        purpose: f.elements['visit-purpose'].value, 
-        dateTime: visitDateTimeISO, 
-        status: 'Scheduled', 
-        collectorId: customer ? customer.salesConsultantId : null 
-    }; 
-    let v = App.DB.get('visits'), id = f.elements['visit-id'].value; 
-    if (id) { 
-        const i = v.findIndex(vi => vi.id === id);
-        const original = v[i];
-        const changes = App.Helpers.getObjectChanges(original, {...original, ...vd});
-        v[i] = { ...v[i], ...vd, id: id }; 
-        App.Helpers.logChange('Updated', 'Visit', `For ${customer.companyName}`, changes); 
-    } else { 
-        vd.id = `visit-${Date.now()}`; 
-        v.push(vd);
-        App.Helpers.logChange('Scheduled', 'Visit', `For ${customer.companyName}`); 
-    } 
-    App.DB.set('visits', v); 
-    App.UI.closeModal('visit-modal'); 
-    App.UI.toast('Visit saved!'); 
-    this.render(); 
-},
-showMarkDoneModal: function(visitId) {
-        // 1. Get Data
+        App.DB.set('visits', v); 
+        App.UI.closeModal('visit-modal'); 
+        App.UI.toast('Visit saved!'); 
+        this.render(); 
+    },
+    showMarkDoneModal: function(visitId) { 
         const visit = App.DB.get('visits').find(v => v.id === visitId);
         if (!visit) return;
         const customer = App.DB.get('customers').find(c => c.accountNo === visit.customerId);
 
-        // 2. Define the "Open Modal" logic as a helper (we call this if validation passes)
         const openModal = () => {
-            document.getElementById('visit-notes-form').reset();
-            document.getElementById('mark-done-visit-id').value = visitId;
-            document.getElementById('log-location-text').textContent = 'Tag Current Location';
-            document.getElementById('log-location-hidden').value = '';
-            
-            if (!this.logNotesQuill) {
-                this.logNotesQuill = new Quill('#log-notes-editor', { theme: 'snow', placeholder: 'Enter contact notes...' });
-            }
+            document.getElementById('visit-notes-form').reset(); 
+            document.getElementById('mark-done-visit-id').value = visitId; 
+            document.getElementById('log-location-text').textContent = 'Tag Current Location'; 
+            document.getElementById('log-location-hidden').value = ''; 
+            if (!this.logNotesQuill) this.logNotesQuill = new Quill('#log-notes-editor', { theme: 'snow', placeholder: 'Enter contact notes...' }); 
             this.logNotesQuill.root.innerHTML = ''; 
-            
             App.state.paymentFlowOrigin = null;
             document.getElementById('promise-to-pay-fields').classList.add('hidden');
             this.updateVisitNotesUI();
-            App.UI.openModal('visit-notes-modal');
+            App.UI.openModal('visit-notes-modal'); 
         };
 
-        // 3. GPS Validation Logic
-        // Check if customer has coordinates and if browser supports Geolocation
         if (customer && customer.latitude && customer.longitude && navigator.geolocation) {
-            
-            // Show a "thinking" toast so the user knows something is happening
             App.UI.toast('Verifying GPS Location...', 'info');
-
             navigator.geolocation.getCurrentPosition(
                 (position) => {
                     const userLat = position.coords.latitude;
                     const userLon = position.coords.longitude;
-
-                    // --- MATH: Haversine Formula for Distance in Meters ---
-                    const R = 6371e3; // Earth radius in meters
+                    const R = 6371e3; 
                     const φ1 = userLat * Math.PI/180;
                     const φ2 = customer.latitude * Math.PI/180;
                     const Δφ = (customer.latitude - userLat) * Math.PI/180;
                     const Δλ = (customer.longitude - userLon) * Math.PI/180;
-
-                    const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
-                              Math.cos(φ1) * Math.cos(φ2) *
-                              Math.sin(Δλ/2) * Math.sin(Δλ/2);
+                    const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ/2) * Math.sin(Δλ/2);
                     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
                     const distance = R * c; 
-                    // -----------------------------------------------------
 
-                    // 4. Check Threshold (500 meters)
                     if (distance > 500) {
-                        // User is too far!
                         Swal.fire({
                             title: 'GPS Warning 📍',
                             html: `You are <b>${(distance/1000).toFixed(2)}km</b> away from the customer.<br>Are you sure you are at the site?`,
@@ -4160,168 +4175,189 @@ showMarkDoneModal: function(visitId) {
                             background: 'var(--card-bg)',
                             color: 'var(--text-primary)'
                         }).then((result) => {
-                            if (result.isConfirmed) openModal(); // Allow override
+                            if (result.isConfirmed) {
+                                const distKm = (distance/1000).toFixed(2);
+                                App.Helpers.logActivity('⚠️ GPS BYPASSED', `Force-completed visit ${distKm}km away from site.`, visit.customerId, null, visit.id);
+                                App.Notifications.create(`🚨 SECURITY ALERT: ${App.state.currentUser.fullName} bypassed GPS check for ${customer.companyName} (${distKm}km away).`);
+                                openModal(); 
+                            }
                         });
                     } else {
-                        // User is close enough
                         App.UI.toast('GPS Verified: You are on site.', 'success');
                         openModal();
                     }
                 },
-                (error) => {
-                    console.warn("GPS Error:", error);
-                    // If GPS fails (e.g., user denied permission), allow them to proceed anyway
-                    openModal();
-                },
+                (error) => { console.warn("GPS Error:", error); openModal(); },
                 { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
             );
         } else {
-            // Customer has no GPS set in database, proceed normally
             openModal();
         }
+    }, 
+    updateVisitNotesUI: function() {
+        const button = document.getElementById('log-record-payment-btn');
+        if (!button) return;
+        if (App.state.paymentFlowOrigin && App.state.paymentFlowOrigin.paymentLogged) {
+            button.innerHTML = `<i class="fas fa-check-circle"></i> Payment Logged`;
+            button.disabled = true;
+            button.classList.remove('btn-success');
+            button.classList.add('btn-outline');
+        } else {
+            button.innerHTML = `<i class="fas fa-dollar-sign"></i> Record Payment`;
+            button.disabled = false;
+            button.classList.add('btn-success');
+            button.classList.remove('btn-outline');
+        }
     },
-updateVisitNotesUI: function() {
-    const button = document.getElementById('log-record-payment-btn');
-    if (!button) return;
-
-    if (App.state.paymentFlowOrigin && App.state.paymentFlowOrigin.paymentLogged) {
-        button.innerHTML = `<i class="fas fa-check-circle"></i> Payment Logged`;
-        button.disabled = true;
-        button.classList.remove('btn-success');
-        button.classList.add('btn-outline');
-    } else {
-        button.innerHTML = `<i class="fas fa-dollar-sign"></i> Record Payment`;
-        button.disabled = false;
-        button.classList.add('btn-success');
-        button.classList.remove('btn-outline');
-    }
-},
-showVisitDetail: function(visitId) { const visit = App.DB.get('visits').find(v => v.id === visitId); if (!visit) return App.UI.toast('Visit not found.', 'error'); const customer = App.DB.get('customers').find(c => c.accountNo === visit.customerId); const contentEl = document.getElementById('visit-detail-content'); const locationHTML = visit.location ? `<a href="https://www.google.com/maps?q=${visit.location}" target="_blank" style="color:var(--primary);">${visit.location}</a>` : 'N/A'; contentEl.innerHTML = `<div class="detail-info-grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));"><div class="detail-info-card"><div class="label">Customer</div><div class="value">${customer ? customer.companyName : 'N/A'}</div></div><div class="detail-info-card"><div class="label">Visit Date</div><div class="value">${App.Helpers.formatDateTime(visit.dateTime)}</div></div><div class="detail-info-card"><div class="label">Contact Method</div><div class="value">${visit.contactMethod || 'N/A'}</div></div><div class="detail-info-card"><div class="label">Outcome</div><div class="value">${visit.outcome || 'N/A'}</div></div><div class="detail-info-card"><div class="label">Location</div><div class="value">${locationHTML}</div></div></div><hr style="border: none; border-top: 1px solid var(--border-color); margin: var(--spacing-6) 0;"><h4 class="card-title mb-4">Notes</h4><div class="card" style="background:var(--bg-color);">${visit.notes || '<p>No notes were entered for this visit.</p>'}</div>`; App.UI.openModal('visit-detail-modal'); }, 
-saveCompletedVisit: function(e) { 
-    e.preventDefault(); 
-    const form = e.target; 
-    const visitId = form.elements['mark-done-visit-id'].value; 
-    const location = document.getElementById('log-location-hidden').value; 
-    let visits = App.DB.get('visits'); 
-    const visitIndex = visits.findIndex(v => v.id === visitId); 
-    if (visitIndex > -1) { 
-        const visit = visits[visitIndex]; 
-        visit.status = "Completed"; 
-        visit.dateTime = new Date().toISOString(); // Update dateTime to now on completion
-        visit.contactMethod = form.elements['log-contact-method'].value; 
-        visit.outcome = form.elements['log-outcome'].value; 
-        visit.notes = this.logNotesQuill.root.innerHTML; 
-        if (location) { 
-            visit.location = location; 
-        }
+    showVisitDetail: function(visitId) { const visit = App.DB.get('visits').find(v => v.id === visitId); if (!visit) return App.UI.toast('Visit not found.', 'error'); const customer = App.DB.get('customers').find(c => c.accountNo === visit.customerId); const contentEl = document.getElementById('visit-detail-content'); const locationHTML = visit.location ? `<a href="https://www.google.com/maps?q=${visit.location}" target="_blank" style="color:var(--primary);">${visit.location}</a>` : 'N/A'; contentEl.innerHTML = `<div class="detail-info-grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));"><div class="detail-info-card"><div class="label">Customer</div><div class="value">${customer ? customer.companyName : 'N/A'}</div></div><div class="detail-info-card"><div class="label">Visit Date</div><div class="value">${App.Helpers.formatDateTime(visit.dateTime)}</div></div><div class="detail-info-card"><div class="label">Contact Method</div><div class="value">${visit.contactMethod || 'N/A'}</div></div><div class="detail-info-card"><div class="label">Outcome</div><div class="value">${visit.outcome || 'N/A'}</div></div><div class="detail-info-card"><div class="label">Duration</div><div class="value">${visit.duration ? visit.duration + ' min' : 'N/A'}</div></div><div class="detail-info-card"><div class="label">Location</div><div class="value">${locationHTML}</div></div></div><hr style="border: none; border-top: 1px solid var(--border-color); margin: var(--spacing-6) 0;"><h4 class="card-title mb-4">Notes</h4><div class="card" style="background:var(--bg-color);">${visit.notes || '<p>No notes were entered for this visit.</p>'}</div>`; App.UI.openModal('visit-detail-modal'); }, 
+    saveCompletedVisit: function(e) { 
+        e.preventDefault(); 
+        const form = e.target; 
+        const visitId = form.elements['mark-done-visit-id'].value; 
+        const location = document.getElementById('log-location-hidden').value; 
+        let visits = App.DB.get('visits'); 
+        const visitIndex = visits.findIndex(v => v.id === visitId); 
         
-        if (visit.outcome === 'Promise to Pay') {
-            visit.promiseAmount = parseFloat(document.getElementById('log-promise-amount').value);
-            visit.promiseDate = document.getElementById('log-promise-date').value;
-            if (!visit.promiseAmount || !visit.promiseDate) {
-                return App.UI.toast('Please enter a promised amount and date.', 'error');
+        if (visitIndex > -1) { 
+            const visit = visits[visitIndex]; 
+            visit.status = "Completed"; 
+            
+            if (visit.checkInTime) {
+                const endTime = Date.now();
+                const durationMins = Math.round((endTime - visit.checkInTime) / 60000); 
+                visit.duration = durationMins > 0 ? durationMins : 1; 
+                visit.checkOutTime = endTime;
+            } else {
+                visit.duration = null; 
             }
+
+            visit.dateTime = new Date().toISOString(); 
+            visit.contactMethod = form.elements['log-contact-method'].value; 
+            visit.outcome = form.elements['log-outcome'].value; 
+            visit.notes = this.logNotesQuill.root.innerHTML; 
+            if (location) { 
+                visit.location = location; 
+            }
+            
+            if (visit.outcome === 'Promise to Pay') {
+                visit.promiseAmount = parseFloat(document.getElementById('log-promise-amount').value);
+                visit.promiseDate = document.getElementById('log-promise-date').value;
+                if (!visit.promiseAmount || !visit.promiseDate) {
+                    return App.UI.toast('Please enter a promised amount and date.', 'error');
+                }
+            }
+            
+            const nextVisitDate = document.getElementById('log-next-date').value; 
+            if (nextVisitDate) { visits.push({ id: `v${Date.now() + 1}`, customerId: visit.customerId, dateTime: `${nextVisitDate}T09:00:00.000Z`, purpose: 'Scheduled Follow-up', collectorId: visit.collectorId, status: "Scheduled" }); } 
+            
+            let logDetails = `(Outcome: ${visit.outcome})`;
+            if(visit.duration) logDetails += `, Duration: ${visit.duration} min`; 
+            if(visit.location) logDetails += ', Location Tagged';
+            
+            // --- NEW: Log Activity for Check-Out ---
+            App.Helpers.logActivity(
+                'Completed Visit (Check-Out)', // Changed Text
+                logDetails, 
+                visit.customerId, 
+                null, 
+                visit.id
+            );
+            // -------------------------------------
+
+            App.Helpers.logChange('Completed', 'Visit', `For customer ${visit.customerId}`);
+        } 
+        App.DB.set('visits', visits); 
+        App.UI.closeModal('visit-notes-modal'); 
+        App.UI.toast(`Visit marked as done! (${visits[visitIndex].duration || '0'} min)`);
+        this.render(); 
+        if (App.state.activePage === 'myday') App.MyDay.render();
+    }, 
+    checkOverdueVisits: function() { let v = App.DB.get('visits'), c = false; const today = new Date(); today.setHours(0, 0, 0, 0); v.forEach(i => { if (i.status === 'Scheduled' && new Date(i.dateTime) < today) { i.status = 'Overdue'; c = true; } }); if (c) App.DB.set('visits', v); }, 
+    tagLocationForVisitLog: function() { 
+        if (!navigator.geolocation) return App.UI.toast('Geolocation not supported.', 'error'); 
+        const locationBtn = document.getElementById('log-location-btn');
+        locationBtn.disabled = true;
+        locationBtn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> <span id="log-location-text">Getting Location...</span>`;
+
+        navigator.geolocation.getCurrentPosition(p => { 
+            const coords = `${p.coords.latitude.toFixed(5)},${p.coords.longitude.toFixed(5)}`; 
+            document.getElementById('log-location-text').textContent = `Tagged: ${coords}`; 
+            document.getElementById('log-location-hidden').value = coords; 
+            locationBtn.innerHTML = `<i class="fas fa-check-circle" style="color: var(--success);"></i> <span id="log-location-text">Location Tagged!</span>`;
+            App.UI.toast('Location tagged for this note!'); 
+        }, () => {
+            locationBtn.disabled = false;
+            locationBtn.innerHTML = `<i class="fas fa-map-marker-alt"></i> <span id="log-location-text">Tag Current Location</span>`;
+            App.UI.toast('Unable to get location.', 'error');
+        }); 
+    }, 
+    deleteVisit(visitId) { const visit = App.DB.get('visits').find(v => v.id === visitId); Swal.fire({ title: `Delete this visit?`, text: "This action cannot be undone.", input: 'textarea', inputLabel: 'Reason for deletion', inputPlaceholder: 'Enter your reason here...', showCancelButton: true, confirmButtonText: 'Yes, delete it!', confirmButtonColor: 'var(--danger)', background: 'var(--card-bg)', color: 'var(--text-primary)', inputValidator: (value) => { if (!value) { return 'You must provide a reason for deletion!' } } }).then(result => { if (result.isConfirmed && result.value) { let visits = App.DB.get('visits'); App.DB.set('visits', visits.filter(v => v.id !== visitId)); App.Helpers.logChange('Deleted', 'Visit', `${visit.purpose} for customer ${visit.customerId}`, `Reason: ${result.value}`); App.UI.toast('Visit deleted.', 'success'); this.render(); } }); } ,
+    showRoutePlannerModal() {
+        const form = document.getElementById('route-planner-form');
+        form.reset();
+        document.getElementById('route-date').value = new Date().toISOString().slice(0, 10);
+        const customers = App.Helpers.getScopedData('customers');
+        const customerListEl = document.getElementById('route-customer-list');
+        customerListEl.innerHTML = customers.length > 0 ? customers.map(c => `<div class="d-flex align-items-center gap-2"><input type="checkbox" name="customerToVisit" value="${c.accountNo}" id="route-${c.accountNo}"><label for="route-${c.accountNo}">${c.companyName}</label></div>`).join('') : '<p>No customers to select.</p>';
+        App.UI.openModal('route-planner-modal');
+    },
+    generateRoute(e) {
+        e.preventDefault();
+        const form = e.target;
+        const selectedCustomerNodes = form.querySelectorAll('input[name="customerToVisit"]:checked');
+        if (selectedCustomerNodes.length < 2) {
+            return App.UI.toast('Please select at least 2 customers to plan a route.', 'warning');
         }
+        const customerIds = Array.from(selectedCustomerNodes).map(node => node.value);
         
-        const nextVisitDate = document.getElementById('log-next-date').value; 
-        if (nextVisitDate) { visits.push({ id: `v${Date.now() + 1}`, customerId: visit.customerId, dateTime: `${nextVisitDate}T09:00:00.000Z`, purpose: 'Scheduled Follow-up', collectorId: visit.collectorId, status: "Scheduled" }); } 
+        App.state.visits.plannedRoute = App.Helpers.optimizeRoute(customerIds);
+        App.UI.closeModal('route-planner-modal');
+        this.renderMapView();
+    },
+    clearRoute() {
+        App.state.visits.plannedRoute = null;
+        this.renderMapView();
+    },
+    drawPlannedRoute() {
+        if (!this.map || !App.state.visits.plannedRoute) return;
+        const route = App.state.visits.plannedRoute;
+        const customerMap = App.DB.get('customers').reduce((map, c) => { map[c.accountNo] = c; return map; }, {});
         
-        let logDetails = `(Outcome: ${visit.outcome})`;
-        if(visit.location) { logDetails += ', Location Tagged'; }
-        App.Helpers.logActivity('completed visit', logDetails, visit.customerId, null, visit.id); 
-        App.Helpers.logChange('Completed', 'Visit', `For customer ${visit.customerId}`);
-    } 
-    App.DB.set('visits', visits); 
-    App.UI.closeModal('visit-notes-modal'); 
-    App.UI.toast('Visit marked as done!');
-	this.render(); 
-    if (App.state.activePage === 'myday') App.MyDay.render();
-}, 
-checkOverdueVisits: function() { let v = App.DB.get('visits'), c = false; const today = new Date(); today.setHours(0, 0, 0, 0); v.forEach(i => { if (i.status === 'Scheduled' && new Date(i.dateTime) < today) { i.status = 'Overdue'; c = true; } }); if (c) App.DB.set('visits', v); }, 
-tagLocationForVisitLog: function() { 
-    if (!navigator.geolocation) return App.UI.toast('Geolocation not supported.', 'error'); 
-    const locationBtn = document.getElementById('log-location-btn');
-    locationBtn.disabled = true;
-    locationBtn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> <span id="log-location-text">Getting Location...</span>`;
+        const markers = [];
+        const latLngs = [];
 
-    navigator.geolocation.getCurrentPosition(p => { 
-        const coords = `${p.coords.latitude.toFixed(5)},${p.coords.longitude.toFixed(5)}`; 
-        document.getElementById('log-location-text').textContent = `Tagged: ${coords}`; 
-        document.getElementById('log-location-hidden').value = coords; 
-        locationBtn.innerHTML = `<i class="fas fa-check-circle" style="color: var(--success);"></i> <span id="log-location-text">Location Tagged!</span>`;
-        App.UI.toast('Location tagged for this note!'); 
-    }, () => {
-        locationBtn.disabled = false;
-        locationBtn.innerHTML = `<i class="fas fa-map-marker-alt"></i> <span id="log-location-text">Tag Current Location</span>`;
-        App.UI.toast('Unable to get location.', 'error');
-    }); 
-}, 
-deleteVisit(visitId) { const visit = App.DB.get('visits').find(v => v.id === visitId); Swal.fire({ title: `Delete this visit?`, text: "This action cannot be undone.", input: 'textarea', inputLabel: 'Reason for deletion', inputPlaceholder: 'Enter your reason here...', showCancelButton: true, confirmButtonText: 'Yes, delete it!', confirmButtonColor: 'var(--danger)', background: 'var(--card-bg)', color: 'var(--text-primary)', inputValidator: (value) => { if (!value) { return 'You must provide a reason for deletion!' } } }).then(result => { if (result.isConfirmed && result.value) { let visits = App.DB.get('visits'); App.DB.set('visits', visits.filter(v => v.id !== visitId)); App.Helpers.logChange('Deleted', 'Visit', `${visit.purpose} for customer ${visit.customerId}`, `Reason: ${result.value}`); App.UI.toast('Visit deleted.', 'success'); this.render(); } }); } ,
-showRoutePlannerModal() {
-    const form = document.getElementById('route-planner-form');
-    form.reset();
-    document.getElementById('route-date').value = new Date().toISOString().slice(0, 10);
-    const customers = App.Helpers.getScopedData('customers');
-    const customerListEl = document.getElementById('route-customer-list');
-    customerListEl.innerHTML = customers.length > 0 ? customers.map(c => `<div class="d-flex align-items-center gap-2"><input type="checkbox" name="customerToVisit" value="${c.accountNo}" id="route-${c.accountNo}"><label for="route-${c.accountNo}">${c.companyName}</label></div>`).join('') : '<p>No customers to select.</p>';
-    App.UI.openModal('route-planner-modal');
-},
-generateRoute(e) {
-    e.preventDefault();
-    const form = e.target;
-    const selectedCustomerNodes = form.querySelectorAll('input[name="customerToVisit"]:checked');
-    if (selectedCustomerNodes.length < 2) {
-        return App.UI.toast('Please select at least 2 customers to plan a route.', 'warning');
-    }
-    const customerIds = Array.from(selectedCustomerNodes).map(node => node.value);
-    
-    App.state.visits.plannedRoute = App.Helpers.optimizeRoute(customerIds);
-    App.UI.closeModal('route-planner-modal');
-    this.renderMapView();
-},
-clearRoute() {
-    App.state.visits.plannedRoute = null;
-    this.renderMapView();
-},
-drawPlannedRoute() {
-    if (!this.map || !App.state.visits.plannedRoute) return;
-    const route = App.state.visits.plannedRoute;
-    const customerMap = App.DB.get('customers').reduce((map, c) => { map[c.accountNo] = c; return map; }, {});
-    
-    const markers = [];
-    const latLngs = [];
+        route.forEach((customerId, index) => {
+            const customer = customerMap[customerId];
+            if (!customer) return;
 
-    route.forEach((customerId, index) => {
-        const customer = customerMap[customerId];
-        if (!customer) return;
+            let hash = 0;
+            for (let i = 0; i < customer.accountNo.length; i++) hash = customer.accountNo.charCodeAt(i) + ((hash << 5) - hash);
+            const mockLat = 25.2048 + ((hash % 100) / 10000);
+            const mockLon = 55.2708 + (((hash / 1000) % 100) / 10000);
 
-        let hash = 0;
-        for (let i = 0; i < customer.accountNo.length; i++) hash = customer.accountNo.charCodeAt(i) + ((hash << 5) - hash);
-        const mockLat = 25.2048 + ((hash % 100) / 10000);
-        const mockLon = 55.2708 + (((hash / 1000) % 100) / 10000);
+            const numberedIcon = L.divIcon({
+                className: 'numbered-marker',
+                html: `<div>${index + 1}</div>`,
+                iconSize: [28, 28],
+                iconAnchor: [14, 14]
+            });
 
-        const numberedIcon = L.divIcon({
-            className: 'numbered-marker',
-            html: `<div>${index + 1}</div>`,
-            iconSize: [28, 28],
-            iconAnchor: [14, 14]
+            const marker = L.marker([mockLat, mockLon], { icon: numberedIcon }).addTo(this.map).bindPopup(`<b>${index + 1}. ${customer.companyName}</b>`);
+            markers.push(marker);
+            latLngs.push([mockLat, mockLon]);
         });
 
-        const marker = L.marker([mockLat, mockLon], { icon: numberedIcon }).addTo(this.map).bindPopup(`<b>${index + 1}. ${customer.companyName}</b>`);
-        markers.push(marker);
-        latLngs.push([mockLat, mockLon]);
-    });
-
-    if (latLngs.length > 1) {
-        L.polyline(latLngs, { color: '#e2000f', weight: 3, opacity: 0.7 }).addTo(this.map);
+        if (latLngs.length > 1) {
+            L.polyline(latLngs, { color: '#e2000f', weight: 3, opacity: 0.7 }).addTo(this.map);
+        }
+        
+        if (markers.length > 0) {
+            const group = new L.featureGroup(markers);
+            this.map.fitBounds(group.getBounds().pad(0.2));
+        }
     }
-    
-    if (markers.length > 0) {
-        const group = new L.featureGroup(markers);
-        this.map.fitBounds(group.getBounds().pad(0.2));
-    }
-}
 });
+
 Object.assign(App.Payments, { 
     getCurrentFilteredData: function() {
         let payments = App.Helpers.getScopedData('payments');
@@ -4997,18 +5033,20 @@ Object.assign(App.Reports, {
         }
     },
     generateActivityReport: function() { 
-        const consultantId = parseInt(document.getElementById('report-consultant-select').value);
+        const consultantId = document.getElementById('report-consultant-select').value;
+        const consultantIdParsed = consultantId === 'all' ? 'all' : parseInt(consultantId);
+        
         const customerId = App.Reports.activityCustomerDropdown.getValue();
-        const consultant = App.DB.get('consultants').find(c => c.id === consultantId);
-        if(!consultant) return App.UI.toast('Please select a valid consultant', 'error');
-        const consultantName = consultant.name;
+        
+        const getConsultantName = (id) => App.DB.get('consultants').find(c => c.id === id)?.name || 'All Consultants';
+        const consultantName = consultantId === 'all' ? 'All Consultants' : getConsultantName(consultantIdParsed);
 
         const startDate = document.getElementById('report-activity-start-date').value; 
         const endDate = document.getElementById('report-activity-end-date').value;
         if (!startDate || !endDate) { return App.UI.toast('Please select both a start and end date.', 'warning'); }
         
         let log = App.DB.get('activityLog').filter(entry => 
-            entry.consultantId === consultantId && 
+            (consultantId === 'all' || entry.consultantId === consultantIdParsed) && 
             entry.date >= startDate && 
             entry.date <= endDate
         ); 
@@ -5017,15 +5055,15 @@ Object.assign(App.Reports, {
             log = log.filter(entry => entry.customerId === customerId);
         }
 
-        const output = document.getElementById('report-output'); 
         if (log.length === 0) { 
-            this.displayReport(`Activity for ${consultantName}`, [], [], `<div class="empty-state"><i class="fas fa-search"></i><h4>No Activity Found</h4><p>The selected consultant${customerId && customerId !== 'all' ? ` for customer ${customerId}` : ''} had no logged activity between ${App.Helpers.formatDate(startDate)} and ${App.Helpers.formatDate(endDate)}.</p></div>`);
+            this.displayReport(`Activity for ${consultantName}`, [], [], `<div class="empty-state"><i class="fas fa-search"></i><h4>No Activity Found</h4><p>No logged activity between ${App.Helpers.formatDate(startDate)} and ${App.Helpers.formatDate(endDate)}.</p></div>`);
             return;
         } 
         
-        const reportTitle = `Activity for ${consultantName}${customerId && customerId !== 'all' ? ` (Customer: ${customerId})` : ''} from ${App.Helpers.formatDate(startDate)} to ${App.Helpers.formatDate(endDate)}`; 
+        const reportTitle = `Activity for ${consultantName} (${App.Helpers.formatDate(startDate)} to ${App.Helpers.formatDate(endDate)})`; 
         
         if (App.state.reports.activityView === 'summary') { 
+            // 1. KPI Calculations
             const activityByDay = log.reduce((acc, entry) => { (acc[entry.date] = acc[entry.date] || []).push(entry); return acc; }, {});
             const attendanceSummary = Object.entries(activityByDay).map(([date, entries]) => {
                 const startEntry = entries.find(e => e.action === 'Started Day');
@@ -5035,42 +5073,155 @@ Object.assign(App.Reports, {
                 return { date, startTime: startEntry ? startEntry.time : 'N/A', endTime: endEntry ? endEntry.time : 'N/A', breakDuration: App.Helpers.formatDuration(totalBreakTime), workDuration: workDuration > 0 ? App.Helpers.formatDuration(workDuration) : 'N/A' };
             }).sort((a,b) => new Date(a.date) - new Date(b.date));
 
-            const completedVisits = log.filter(e => e.action.includes('completed visit')).length; 
-            const recordedPayments = log.filter(e => e.action.includes('recorded a payment')); 
-            const totalRecovered = recordedPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+            // Case-insensitive checks for counters
+            const completedVisits = log.filter(e => e.action.toLowerCase().includes('completed visit')).length; 
+            const startedVisits = log.filter(e => e.action.toLowerCase().includes('started visit')).length;
+            const gpsViolations = log.filter(e => e.action.includes('GPS BYPASSED')).length;
+            const recordedPayments = log.filter(e => e.action.toLowerCase().includes('recorded a payment') || e.action.toLowerCase().includes('payment')).length; 
+            const totalRecovered = log.filter(e => e.action.toLowerCase().includes('payment') && e.amount).reduce((sum, p) => sum + (p.amount || 0), 0);
             
-            const summaryContent = `<h4 class="card-title" style="font-size: var(--fs-lg); margin-bottom: var(--spacing-4);">Performance Summary</h4><div class="detail-info-grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));"><div class="detail-info-card"><div class="label">ACTIVE DAYS</div><div class="value">${attendanceSummary.length}</div></div><div class="detail-info-card"><div class="label">VISITS COMPLETED</div><div class="value">${completedVisits}</div></div><div class="detail-info-card"><div class="label">PAYMENTS RECORDED</div><div class="value">${recordedPayments.length}</div></div><div class="detail-info-card"><div class="label">TOTAL RECOVERED</div><div class="value" style="color:var(--success);">${App.Helpers.formatCurrency(totalRecovered)}</div></div></div>`;
+            // 2. Summary Cards HTML
+            const visitSummaryHTML = `
+                <div class="detail-info-card">
+                    <div class="label">VISIT FLOW</div>
+                    <div class="value" style="font-size: 1rem;">
+                        <div><i class="fas fa-play" style="color:var(--success); font-size: 0.8rem;"></i> Started: ${startedVisits}</div>
+                        <div><i class="fas fa-check" style="color:var(--primary); font-size: 0.8rem;"></i> Completed: ${completedVisits}</div>
+                    </div>
+                </div>
+            `;
+
+            const violationHTML = gpsViolations > 0 
+                ? `<div class="detail-info-card" style="border-color:var(--danger); background:rgba(220,53,69,0.05);"><div class="label" style="color:var(--danger);">GPS VIOLATIONS</div><div class="value" style="color:var(--danger);">${gpsViolations}</div></div>` 
+                : '';
+
+            let summaryContent = `<h4 class="card-title" style="font-size: var(--fs-lg); margin-bottom: var(--spacing-4);">Performance Summary</h4><div class="detail-info-grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));"><div class="detail-info-card"><div class="label">ACTIVE DAYS</div><div class="value">${attendanceSummary.length}</div></div>${visitSummaryHTML}${violationHTML}<div class="detail-info-card"><div class="label">PAYMENTS RECORDED</div><div class="value">${recordedPayments}</div></div><div class="detail-info-card"><div class="label">TOTAL RECOVERED</div><div class="value" style="color:var(--success);">${App.Helpers.formatCurrency(totalRecovered)}</div></div></div>`;
             
+            // 3. Detailed Timeline Table (Fixed Filter)
+            const customerMap = App.DB.get('customers').reduce((map, c) => { map[c.accountNo] = c; return map;}, {});
+            const consultantMap = App.DB.get('consultants').reduce((map, c) => { map[c.id] = c.name; return map;}, {});
+
+            // Filter for "interesting" events - NOW CASE INSENSITIVE
+            const timelineEvents = log.filter(e => {
+                const act = e.action.toLowerCase();
+                return act.includes('visit') || act.includes('gps') || act.includes('payment');
+            }).sort((a,b) => b.timestamp - a.timestamp);
+
+            let tableRows = '<tr><td colspan="5" style="text-align:center; color:var(--text-secondary);">No timeline events found for this period.</td></tr>';
+
+            if (timelineEvents.length > 0) {
+                tableRows = timelineEvents.map(e => {
+                    const customer = e.customerId ? customerMap[e.customerId] : null;
+                    const customerName = customer ? customer.companyName : '-';
+                    const consName = consultantMap[e.consultantId] || 'Unknown';
+                    
+                    let style = '';
+                    let actionLabel = e.action;
+                    const actLower = e.action.toLowerCase();
+
+                    // Clean up labels and styles
+                    if(actLower.includes('gps')) {
+                        style = 'color:var(--danger); font-weight:bold;';
+                        actionLabel = '⚠️ GPS Violation';
+                    }
+                    else if(actLower.includes('started')) {
+                        style = 'color:var(--success);';
+                        actionLabel = '▶️ Started Visit';
+                    }
+                    else if(actLower.includes('completed')) {
+                        style = 'color:var(--primary);';
+                        actionLabel = '✅ Completed Visit';
+                    }
+                    else if(actLower.includes('payment')) {
+                        style = 'color:#ffc107;';
+                        actionLabel = '💰 Payment';
+                    }
+                    
+                    return `<tr>
+                        <td style="white-space:nowrap;">${App.Helpers.formatDate(e.date)} ${e.time}</td>
+                        <td>${consName}</td>
+                        <td style="${style}">${actionLabel}</td>
+                        <td>${customerName}</td>
+                        <td style="font-size:0.9em; color:var(--text-secondary);">${e.details || '-'}</td>
+                    </tr>`;
+                }).join('');
+            }
+
+            summaryContent += `
+                <hr style="border: 0; border-top: 2px solid var(--border-color); margin: var(--spacing-6) 0;">
+                <h4 class="card-title mb-4">Detailed Visit & Security Timeline</h4>
+                <div class="table-container" style="max-height: 400px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 8px;">
+                    <table class="data-table">
+                        <thead style="position: sticky; top: 0; background: var(--card-bg); z-index: 1;">
+                            <tr><th>Time</th><th>Consultant</th><th>Action</th><th>Customer</th><th>Details</th></tr>
+                        </thead>
+                        <tbody>
+                            ${tableRows}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+
             this.displayReport(reportTitle, [], [], summaryContent); 
         } else { 
+            // --- TABLE VIEW (Case Insensitive Updates) ---
             const customerMap = App.DB.get('customers').reduce((map, c) => { map[c.accountNo] = c; return map;}, {});
             const visitMap = App.DB.get('visits').reduce((map, v) => { map[v.id] = v; return map; }, {});
-            const headers = ['Date', 'Time', 'Category', 'Customer', 'Account #', 'Action/Outcome', 'Notes', 'Amount', 'Outstanding'];
+            const consultantMap = App.DB.get('consultants').reduce((map, c) => { map[c.id] = c.name; return map;}, {});
+
+            const headers = ['Date', 'Time', 'Consultant', 'Category', 'Customer', 'Action/Outcome', 'Details/Notes', 'Amount'];
+            
             const data = log.sort((a, b) => a.timestamp - b.timestamp).map(entry => {
                 const customer = entry.customerId ? customerMap[entry.customerId] : null;
-                let customerName = customer ? customer.companyName : 'N/A'; let accountNo = customer ? customer.accountNo : 'N/A';
-                let category = 'General'; let actionOutcome = entry.action; let notes = '-'; let amount = '-'; let outstanding = customer ? App.Helpers.formatCurrency(customer.outstanding) : '-';
+                const rowConsultantName = consultantMap[entry.consultantId] || 'Unknown';
+                
+                let customerName = customer ? customer.companyName : '-'; 
+                let category = 'General'; 
+                let actionOutcome = entry.action; 
+                let notes = entry.details || '-'; 
+                let amount = '-'; 
+                const actLower = entry.action.toLowerCase();
 
-                if (entry.action.includes('Day') || entry.action.includes('Break')) { category = 'Attendance';
-                } else if (entry.action.includes('payment')) {
+                if (actLower.includes('gps bypassed')) {
+                    category = '🚨 SECURITY';
+                    actionOutcome = 'GPS Check Bypassed';
+                    notes = `<span style="color:var(--danger); font-weight:600;">${entry.details}</span>`;
+                }
+                else if (actLower.includes('started visit')) {
+                    category = 'Visit';
+                    actionOutcome = '⏱️ Check-In';
+                    notes = 'Clock started';
+                }
+                else if (actLower.includes('completed visit')) {
+                    category = 'Visit';
+                    actionOutcome = '✅ Check-Out';
+                    notes = entry.details;
+                }
+                else if (actLower.includes('day') || actLower.includes('break')) { 
+                    category = 'Attendance';
+                } else if (actLower.includes('payment')) {
                     category = 'Payment';
                     const paymentDetails = App.Helpers.parsePaymentDetails(entry.details);
                     actionOutcome = paymentDetails.method;
                     if (entry.amount && typeof entry.amount === 'number') amount = App.Helpers.formatCurrency(entry.amount);
-                } else if (entry.action.includes('visit')) {
-                    category = 'Visit';
-                    const visitDetails = App.Helpers.parseVisitDetails(entry.details);
-                    actionOutcome = visitDetails.outcome;
-                    const visit = visitMap[entry.visitId];
-                    if (visit && visit.notes) notes = App.Helpers.stripHtml(visit.notes);
-                } else if (entry.action.includes('added a new customer')) {
+                } else if (actLower.includes('added a new customer')) {
                     category = 'Customer'; actionOutcome = 'New Account';
                 }
-                return [App.Helpers.formatDate(entry.date), entry.time, category, customerName, accountNo, actionOutcome, notes, amount, outstanding];
+
+                return [
+                    App.Helpers.formatDate(entry.date), 
+                    entry.time, 
+                    rowConsultantName,
+                    category, 
+                    customerName, 
+                    actionOutcome, 
+                    notes, 
+                    amount
+                ];
             });
             this.displayReport(reportTitle, headers, data); 
         } 
-    }, 
+    },
     generateCollectionReport: function() {
         const startDate = document.getElementById('report-collection-start-date').value;
         const endDate = document.getElementById('report-collection-end-date').value;
@@ -5418,6 +5569,7 @@ Object.assign(App.Reports, {
 
 Object.assign(App.Analytics, {
     charts: {},
+    
     render() {
         // --- Layout ---
         const topHTML = `
@@ -5430,6 +5582,23 @@ Object.assign(App.Analytics, {
                 <div class="card">
                     <div class="card-header"><h3 class="card-title">Collection Efficiency Funnel</h3></div>
                     <div class="chart-container" style="height: 300px;"><canvas id="funnel-chart"></canvas></div>
+                </div>
+            </div>
+        `;
+
+        // --- NEW: Portfolio Health Section ---
+        const healthTrendHTML = `
+            <div class="card mb-6">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h3 class="card-title">Portfolio Health Trend (Risk Analysis)</h3>
+                    <div style="font-size: 0.8rem; color: var(--text-secondary);">
+                        <i class="fas fa-circle" style="color: #dc3545;"></i> Critical
+                        <i class="fas fa-circle" style="color: #ffc107; margin-left:10px;"></i> Warning
+                        <i class="fas fa-circle" style="color: #10b981; margin-left:10px;"></i> Good Standing
+                    </div>
+                </div>
+                <div class="chart-container" style="height: 350px;">
+                    <canvas id="portfolio-health-chart"></canvas>
                 </div>
             </div>
         `;
@@ -5448,19 +5617,151 @@ Object.assign(App.Analytics, {
         document.getElementById('analytics-page').innerHTML = `
             <div class="page-header"><h2>Analytics Dashboard</h2><p>Visual insights into recovery performance and activities.</p></div>
             ${kpiGrid}
-            ${topHTML}
+            ${healthTrendHTML} ${topHTML}
             ${bottomGrid}
         `;
 
         this.renderKpiCards();
+        this.renderPortfolioHealthChart(); // <--- Call New Function
         this.renderTrendChart();
-        this.renderFunnelChart(); // <--- NEW
+        this.renderFunnelChart();
         this.renderRecoveryByConsultantChart();
         this.renderRecoveryByEmirateChart();
         this.renderPaymentMethodsChart();
         this.renderVisitOutcomeChart();
     },
+
     setupEventListeners() {},
+
+    // --- NEW FUNCTION: Portfolio Health Logic ---
+    renderPortfolioHealthChart() {
+        const ctx = document.getElementById('portfolio-health-chart').getContext('2d');
+        if (this.charts.portfolioHealth) this.charts.portfolioHealth.destroy();
+
+        const customers = App.DB.get('customers');
+        const payments = App.DB.get('payments');
+        const visits = App.DB.get('visits');
+
+        // 1. Generate last 6 months points
+        const labels = [];
+        const dataCritical = [];
+        const dataWarning = [];
+        const dataGood = [];
+
+        for (let i = 5; i >= 0; i--) {
+            // "Reference Date" is the end of that specific month
+            const refDate = new Date();
+            refDate.setMonth(refDate.getMonth() - i);
+            refDate.setDate(1); // Start of month
+            refDate.setMonth(refDate.getMonth() + 1); // Jump to next month
+            refDate.setDate(0); // Go back 1 day = End of the target month
+            
+            labels.push(refDate.toLocaleString('default', { month: 'short', year: '2-digit' }));
+
+            // 2. "Time Machine" Logic: Calculate status AS OF refDate
+            let countCritical = 0;
+            let countWarning = 0;
+            let countGood = 0;
+
+            customers.forEach(c => {
+                // Filter data to only see what happened BEFORE refDate
+                const histPayments = payments.filter(p => p.customerId === c.accountNo && new Date(p.date) <= refDate && p.status === 'Completed');
+                const histVisits = visits.filter(v => v.customerId === c.accountNo && new Date(v.dateTime) <= refDate && v.status === 'Completed');
+
+                // Calculate Balance at that time
+                const paidByThen = histPayments.reduce((sum, p) => sum + p.amount, 0);
+                const currentBalanceAtTime = c.initialDebt - paidByThen;
+
+                if (currentBalanceAtTime <= 0) return; // Skip if they had paid off by then
+
+                // --- Calculate Health Score (Simplified for speed) ---
+                let score = 100;
+                
+                // Penalty 1: Legacy Debt (Static)
+                if (c.balance_lte_2018 > 0) score -= 40;
+
+                // Penalty 2: Payment Recency
+                if (histPayments.length > 0) {
+                    const lastPayDate = new Date(Math.max(...histPayments.map(p => new Date(p.date))));
+                    const daysDiff = (refDate - lastPayDate) / (1000 * 60 * 60 * 24);
+                    if (daysDiff > 90) score -= 30;
+                    else if (daysDiff > 60) score -= 15;
+                } else {
+                    // No payments ever (relative to refDate)
+                    score -= 30;
+                }
+
+                // Penalty 3: Visit Recency
+                if (histVisits.length === 0) {
+                    // Check if account was created long ago
+                    const debtDate = new Date(c.debtSince || new Date());
+                    if ((refDate - debtDate) / (1000 * 60 * 60 * 24) > 60) score -= 10;
+                }
+
+                // Classify
+                if (score >= 80) countGood++;
+                else if (score >= 50) countWarning++;
+                else countCritical++;
+            });
+
+            dataCritical.push(countCritical);
+            dataWarning.push(countWarning);
+            dataGood.push(countGood);
+        }
+
+        // 3. Render Chart
+        this.charts.portfolioHealth = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'Critical (High Risk)',
+                        data: dataCritical,
+                        borderColor: '#dc3545',
+                        backgroundColor: 'rgba(220, 53, 69, 0.1)',
+                        fill: true,
+                        tension: 0.4
+                    },
+                    {
+                        label: 'Warning (Needs Attention)',
+                        data: dataWarning,
+                        borderColor: '#ffc107',
+                        backgroundColor: 'rgba(255, 193, 7, 0.1)',
+                        fill: true,
+                        tension: 0.4
+                    },
+                    {
+                        label: 'Good Standing',
+                        data: dataGood,
+                        borderColor: '#10b981',
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        fill: true,
+                        tension: 0.4
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: { 
+                        beginAtZero: true, 
+                        grid: { color: 'var(--border-color)' },
+                        title: { display: true, text: 'Number of Customers' }
+                    },
+                    x: { grid: { display: false } }
+                },
+                plugins: {
+                    tooltip: {
+                        mode: 'index',
+                        intersect: false
+                    }
+                }
+            }
+        });
+    },
+
     renderKpiCards() {
         const customers = App.DB.get('customers');
         const payments = App.DB.get('payments').filter(p => p.status === 'Completed');
@@ -6026,18 +6327,29 @@ Object.assign(App.Users, {
 Object.assign(App.Notifications, { init() { document.getElementById('notification-bell-btn').addEventListener('click', (e) => { e.stopPropagation(); this.toggleDropdown(); }); document.body.addEventListener('click', (e) => { const bellBtn = document.getElementById('notification-bell-btn'); const dropdown = document.getElementById('notification-dropdown'); if (dropdown && !dropdown.classList.contains('hidden') && !bellBtn.contains(e.target) && !dropdown.contains(e.target)) { dropdown.classList.add('hidden'); } }); }, create(message) { let notifications = App.DB.get('notifications'); const newNotification = { id: `notif_${Date.now()}`, timestamp: Date.now(), message: message, isRead: false }; notifications.unshift(newNotification); App.DB.set('notifications', notifications); if(App.state.currentUser && App.state.currentUser.role === 'admin') this.render(); }, render() { const notifications = App.DB.get('notifications').sort((a, b) => b.timestamp - a.timestamp); const unreadCount = notifications.filter(n => !n.isRead).length; const badge = document.getElementById('notification-badge'); if (unreadCount > 0) { badge.textContent = unreadCount; badge.classList.remove('hidden'); } else { badge.classList.add('hidden'); } const list = document.getElementById('notification-list'); list.innerHTML = notifications.length > 0 ? notifications.slice(0, 15).map(n => `<li style="padding: var(--spacing-2) 0; border-bottom: 1px solid var(--border-color); ${!n.isRead ? 'font-weight: 600;' : ''}">${n.message}<div style="font-size: var(--fs-sm); color: var(--text-secondary); font-weight: 400; margin-top: 4px;"><i class="fas fa-clock"></i> ${App.Helpers.timeAgo(n.timestamp)}</div></li>`).join('') : '<li>No new notifications.</li>'; }, toggleDropdown() { const dropdown = document.getElementById('notification-dropdown'); const bellBtn = document.getElementById('notification-bell-btn'); const rect = bellBtn.getBoundingClientRect(); dropdown.style.top = `${rect.bottom + 10}px`; dropdown.style.right = `${window.innerWidth - rect.right}px`; dropdown.classList.toggle('hidden'); if(!dropdown.classList.contains('hidden')) { this.markAllAsRead(); } }, markAllAsRead() { let notifications = App.DB.get('notifications'); if (notifications.some(n => !n.isRead)) { setTimeout(() => { const updatedNotifications = notifications.map(n => ({ ...n, isRead: true })); App.DB.set('notifications', updatedNotifications); this.render(); }, 1500); } } });
 
 Object.assign(App.CommandPalette, {
+    selectedIndex: 0,
+    results: [],
+
     init() {
-        // 1. Keyboard Shortcut Listener (Ctrl+K or Cmd+K)
+        // 1. Open/Close Shortcut
         window.addEventListener('keydown', (e) => {
             if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
                 e.preventDefault();
                 this.open();
             }
             if (e.key === 'Escape') this.close();
+            
+            // Navigation Shortcuts (only if open)
+            const modal = document.getElementById('command-palette-modal');
+            if (modal.classList.contains('active')) {
+                if (e.key === 'ArrowDown') { e.preventDefault(); this.navigate(1); }
+                if (e.key === 'ArrowUp') { e.preventDefault(); this.navigate(-1); }
+                if (e.key === 'Enter') { e.preventDefault(); this.execute(); }
+            }
         });
 
         // 2. Input Listener
-        document.getElementById('command-palette-input').addEventListener('input', App.Helpers.debounce(e => this.search(e.target.value), 200));
+        document.getElementById('command-palette-input').addEventListener('input', (e) => this.search(e.target.value));
         
         // 3. Close on Outside Click
         document.getElementById('command-palette-modal').addEventListener('click', (e) => {
@@ -6047,85 +6359,121 @@ Object.assign(App.CommandPalette, {
 
     open() {
         App.UI.openModal('command-palette-modal');
-        document.getElementById('command-palette-input').focus();
-        this.search(''); // Show default options
+        const input = document.getElementById('command-palette-input');
+        input.value = '';
+        input.focus();
+        this.search(''); 
     },
 
     close() {
-        document.getElementById('command-palette-input').value = '';
-        document.getElementById('command-palette-results').innerHTML = '';
         App.UI.closeModal('command-palette-modal');
     },
 
-    search(query) {
-        const container = document.getElementById('command-palette-results');
-        const q = query.toLowerCase();
-        let results = [];
+    navigate(direction) {
+        this.selectedIndex += direction;
+        if (this.selectedIndex < 0) this.selectedIndex = this.results.length - 1;
+        if (this.selectedIndex >= this.results.length) this.selectedIndex = 0;
+        this.renderResults();
+        
+        // Scroll into view logic
+        const selectedEl = document.querySelector('.command-item.selected');
+        if(selectedEl) selectedEl.scrollIntoView({ block: 'nearest' });
+    },
 
-        // A. SYSTEM ACTIONS (Navigation & Tools)
+    execute() {
+        if (this.results[this.selectedIndex]) {
+            this.results[this.selectedIndex].action();
+            this.close();
+        }
+    },
+
+    search(query) {
+        const q = query.toLowerCase();
+        this.results = [];
+
+        // A. SYSTEM ACTIONS
         const actions = [
-            { type: 'Go To', title: 'Dashboard', icon: 'fa-chart-pie', action: () => App.UI.navigateTo('dashboard') },
-            { type: 'Go To', title: 'Customers List', icon: 'fa-users', action: () => App.UI.navigateTo('customers') },
-            { type: 'Go To', title: 'Visits & Map', icon: 'fa-map-marked-alt', action: () => App.UI.navigateTo('visits') },
-            { type: 'Action', title: 'Add New Customer', icon: 'fa-user-plus', action: () => App.Customers.showCustomerForm() },
-            { type: 'Action', title: 'Record Payment', icon: 'fa-credit-card', action: () => App.Payments.showPaymentForm() },
-            { type: 'Action', title: 'Schedule Visit', icon: 'fa-calendar-plus', action: () => App.Visits.showScheduleModal() }
+            { group: 'Navigation', title: 'Go to Dashboard', icon: 'fa-chart-pie', action: () => App.UI.navigateTo('dashboard') },
+            { group: 'Navigation', title: 'Go to Customers', icon: 'fa-users', action: () => App.UI.navigateTo('customers') },
+            { group: 'Navigation', title: 'Go to Visits Map', icon: 'fa-map-marked-alt', action: () => { App.UI.navigateTo('visits'); App.Visits.switchView('map'); } },
+            { group: 'Navigation', title: 'Go to Payments', icon: 'fa-credit-card', action: () => App.UI.navigateTo('payments') },
+            { group: 'Actions', title: 'Add New Customer', icon: 'fa-user-plus', action: () => App.Customers.showCustomerForm() },
+            { group: 'Actions', title: 'Record a Payment', icon: 'fa-file-invoice-dollar', action: () => App.Payments.showPaymentForm() },
+            { group: 'Actions', title: 'Schedule a Visit', icon: 'fa-calendar-plus', action: () => App.Visits.showScheduleModal() },
+            { group: 'Actions', title: 'Plan Route', icon: 'fa-route', action: () => App.Visits.showRoutePlannerModal() },
+            { group: 'System', title: 'Toggle Theme', icon: 'fa-adjust', action: () => App.UI.toggleTheme() },
+            { group: 'System', title: 'Backup Data', icon: 'fa-download', action: () => { App.UI.navigateTo('settings'); App.Settings.backupData(); } }
         ];
 
         // Filter Actions
-        results.push(...actions.filter(a => a.title.toLowerCase().includes(q)));
+        if (q === '') {
+            this.results = actions.slice(0, 5); // Default view
+        } else {
+            this.results.push(...actions.filter(a => a.title.toLowerCase().includes(q)));
+        }
 
-        // B. DATA SEARCH (If query exists)
+        // B. CUSTOMER SEARCH (Only if typing)
         if (q.length > 1) {
-            // Search Customers
             const customers = App.DB.get('customers');
-            customers.forEach(c => {
-                if (c.companyName.toLowerCase().includes(q) || c.accountNo.toLowerCase().includes(q)) {
-                    results.push({
-                        type: 'Customer',
-                        title: c.companyName,
-                        desc: `Account: ${c.accountNo} • ${App.Helpers.formatCurrency(c.outstanding)}`,
-                        icon: 'fa-building',
-                        action: () => App.Customers.showCustomerDetail(c.accountNo)
-                    });
-                }
+            const matches = customers.filter(c => 
+                c.companyName.toLowerCase().includes(q) || 
+                c.accountNo.toLowerCase().includes(q)
+            ).slice(0, 5); // Limit to 5
+
+            matches.forEach(c => {
+                this.results.push({
+                    group: 'Customers',
+                    title: c.companyName,
+                    desc: `${c.accountNo} • Bal: ${App.Helpers.formatCurrency(c.outstanding)}`,
+                    icon: 'fa-building',
+                    action: () => App.Customers.showCustomerDetail(c.accountNo)
+                });
             });
         }
 
-        this.renderResults(results);
+        this.selectedIndex = 0;
+        this.renderResults();
     },
 
-    renderResults(results) {
+    renderResults() {
         const container = document.getElementById('command-palette-results');
         
-        if (results.length === 0) {
-            container.innerHTML = '<div style="padding: 1rem; text-align: center; color: var(--text-secondary);">No results found.</div>';
+        if (this.results.length === 0) {
+            container.innerHTML = '<div style="padding: 2rem; text-align: center; color: var(--text-secondary);"><i class="fas fa-ghost" style="font-size: 1.5rem; margin-bottom: 10px;"></i><br>No results found.</div>';
             return;
         }
 
-        container.innerHTML = results.map((r, i) => `
-            <div class="command-item" onclick="window.cmdAction(${i})" style="padding: 10px 15px; cursor: pointer; border-radius: 8px; display: flex; align-items: center; gap: 15px; transition: background 0.1s;">
-                <div style="width: 35px; height: 35px; background: var(--bg-color); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: var(--text-secondary);">
-                    <i class="fas ${r.icon}"></i>
-                </div>
-                <div>
-                    <div style="font-weight: 500; color: var(--text-primary);">${r.title}</div>
-                    ${r.desc ? `<div style="font-size: 0.8rem; color: var(--text-secondary);">${r.desc}</div>` : `<div style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">${r.type}</div>`}
-                </div>
-            </div>
-        `).join('');
+        let html = '';
+        let lastGroup = '';
 
-        // Attach Click Handlers via global temporary function (simplest for this architecture)
-        window.cmdAction = (index) => {
-            results[index].action();
-            this.close();
-        };
+        this.results.forEach((r, i) => {
+            // Add Group Header if it changes
+            if (r.group !== lastGroup) {
+                html += `<div class="command-group-title">${r.group}</div>`;
+                lastGroup = r.group;
+            }
 
-        // Add Hover Effect via JS (or add CSS)
-        container.querySelectorAll('.command-item').forEach(item => {
-            item.addEventListener('mouseenter', () => item.style.backgroundColor = 'var(--bg-color)');
-            item.addEventListener('mouseleave', () => item.style.backgroundColor = 'transparent');
+            const isSelected = i === this.selectedIndex ? 'selected' : '';
+            html += `
+                <div class="command-item ${isSelected}" onclick="App.CommandPalette.clickItem(${i})">
+                    <div style="width: 35px; height: 35px; background: var(--bg-color); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); border: 1px solid var(--border-color);">
+                        <i class="fas ${r.icon}"></i>
+                    </div>
+                    <div>
+                        <div style="font-weight: 500; color: var(--text-primary);">${r.title}</div>
+                        ${r.desc ? `<div style="font-size: 0.8rem; color: var(--text-secondary);">${r.desc}</div>` : ''}
+                    </div>
+                    ${isSelected ? '<i class="fas fa-level-down-alt" style="margin-left: auto; transform: rotate(90deg); color: var(--text-secondary);"></i>' : ''}
+                </div>
+            `;
         });
+
+        container.innerHTML = html;
+    },
+
+    clickItem(index) {
+        this.selectedIndex = index;
+        this.execute();
     }
 });
 
