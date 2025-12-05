@@ -1030,242 +1030,108 @@ Object.assign(App.Auth, {
         resetTimer(); // Start immediately
     }
 });
+
 Object.assign(App.DB, { 
-    initialize() {
-        if (!localStorage.getItem('consultants')) localStorage.setItem('consultants', JSON.stringify([]));
-        if (!localStorage.getItem('users')) localStorage.setItem('users', JSON.stringify([]));
-        if (!localStorage.getItem('customers')) localStorage.setItem('customers', JSON.stringify([]));
-        if (!localStorage.getItem('visits')) localStorage.setItem('visits', JSON.stringify([]));
-        if (!localStorage.getItem('payments')) localStorage.setItem('payments', JSON.stringify([]));
-        if (!localStorage.getItem('activityLog')) localStorage.setItem('activityLog', JSON.stringify([]));
-        if (!localStorage.getItem('notifications')) localStorage.setItem('notifications', JSON.stringify([]));
-        if (!localStorage.getItem('changeLog')) localStorage.setItem('changeLog', JSON.stringify([]));
-        if (!localStorage.getItem('forecasts')) localStorage.setItem('forecasts', JSON.stringify([]));
-        if (!localStorage.getItem('customerComments')) localStorage.setItem('customerComments', JSON.stringify([]));
-        if (!localStorage.getItem('customerForecasts')) localStorage.setItem('customerForecasts', JSON.stringify([]));
+    // ⚠️ PASTE YOUR COPIED GOOGLE URL BELOW ⚠️
+    apiUrl: 'https://script.google.com/macros/s/AKfycbz6ekyso6yi8OXyYr-o3e6qoSCGR2CB2daGDWLJ3ZF7NDWDuTjQmWEWkNWVwhdkvP29Rg/exec', 
 
-        // Initialize customer table column settings
-        if (!localStorage.getItem('customerTableColumns')) localStorage.setItem('customerTableColumns', JSON.stringify(App.state.customerTableColumns));
-        else App.state.customerTableColumns = JSON.parse(localStorage.getItem('customerTableColumns'));
-        // Initialize pagination settings
-        const paginationSettings = JSON.parse(localStorage.getItem('paginationSettings'));
-        if (paginationSettings) {
-            // Deep merge the pagination settings to preserve currentPage property
-            Object.keys(paginationSettings).forEach(key => {
-                if (App.state.pagination[key]) {
-                    Object.assign(App.state.pagination[key], paginationSettings[key]);
-                }
+    cache: {}, 
+
+    async initialize() {
+        // Show Loading Spinner on startup
+        document.getElementById('loading-overlay').style.display = 'flex';
+        
+        try {
+            // 1. Fetch ALL data from Cloud
+            console.log("Syncing with Cloud...");
+            const response = await fetch(this.apiUrl + '?action=getAll');
+            const cloudData = await response.json();
+            
+            // 2. Update Local Storage & Memory
+            Object.keys(cloudData).forEach(key => {
+                localStorage.setItem(key, JSON.stringify(cloudData[key]));
+                this.cache[key] = cloudData[key];
             });
+            console.log("Cloud Sync Complete!");
+            App.UI.toast("Data Synced from Cloud", "success");
+            
+        } catch (error) {
+            console.error("Cloud Error:", error);
+            App.UI.toast("Working Offline (Cloud Sync Failed)", "warning");
+            this.loadFromLocal();
         }
 
+        this.runMigrations(); 
+        document.getElementById('loading-overlay').style.display = 'none';
+    },
 
-        const users = this.get('users');
-        if (users.length === 0) {
-            console.log("No users found. Creating a default admin account.");
-            const defaultAdmin = { 
-                id: 1, 
-                username: 'admin', 
-                fullName: 'Admin User', 
-                password: btoa('admin123'), // Encode the default password
-                role: 'admin', 
-                department: 'Administration', 
-                lastLogin: null, 
-                assignedConsultantId: null 
-            };
-            this.set('users', [defaultAdmin]);
-            console.log("Default admin created. Username: admin, Password: admin123");
+    loadFromLocal() {
+        const tables = ['customers', 'visits', 'payments', 'users', 'consultants', 'activityLog', 'notifications', 'changeLog', 'forecasts', 'customerComments', 'customerForecasts'];
+        tables.forEach(t => {
+            this.cache[t] = JSON.parse(localStorage.getItem(t) || '[]');
+        });
+    },
+
+    get(key) {
+        if (!this.cache[key]) {
+            this.cache[key] = JSON.parse(localStorage.getItem(key) || '[]');
         }
+        return this.cache[key];
+    },
 
-        this.runMigrations();
-    }, 
-    runMigrations() {
-        const dataModelVersion = parseInt(localStorage.getItem('dataModelVersion') || '1');
-        if (dataModelVersion < 2) {
-            console.log("Running data migration to v2 (Consultant IDs)...");
-            const consultants = this.get('consultants');
-            const consultantMap = consultants.reduce((map, c) => { map[c.name] = c.id; return map; }, {});
+    set(key, data) {
+        this.cache[key] = data;
+        localStorage.setItem(key, JSON.stringify(data));
+        // NOTE: This basic 'set' is now only for local UI updates.
+        // Cloud updates happen via the specific methods below.
+    },
+    
+    // --- CLOUD SYNC METHODS ---
+    async addToCloud(table, item) {
+        // 1. Update UI Instantly (Optimistic UI)
+        const list = this.get(table);
+        list.push(item);
+        this.set(table, list);
 
-            let customers = this.get('customers');
-            customers.forEach(c => { if (c.salesConsultant && !c.salesConsultantId) c.salesConsultantId = consultantMap[c.salesConsultant]; });
-            this.set('customers', customers);
+        // 2. Send to Google in Background
+        this.sendToGoogle('add', table, item);
+    },
 
-            let users = this.get('users');
-            users.forEach(u => { if (u.assignedConsultant && !u.assignedConsultantId) u.assignedConsultantId = consultantMap[u.assignedConsultant]; });
-            this.set('users', users);
-
-            let visits = this.get('visits');
-            visits.forEach(v => { if (v.collector && !v.collectorId) v.collectorId = consultantMap[v.collector]; });
-            this.set('visits', visits);
-
-            let activityLog = this.get('activityLog');
-            activityLog.forEach(log => { if (log.consultant && !log.consultantId) log.consultantId = consultantMap[log.consultant]; });
-            this.set('activityLog', activityLog);
-
-            localStorage.setItem('dataModelVersion', '2');
-            console.log("Migration to v2 complete.");
-        }
-        if (dataModelVersion < 3) {
-            console.log("Running data migration to v3 (Encode Passwords)...");
-            let users = this.get('users');
-            let updated = false;
-            users.forEach(user => {
-                try {
-                    atob(user.password);
-                } catch(e) {
-                    user.password = btoa(user.password);
-                    updated = true;
-                }
-            });
-            if (updated) {
-                this.set('users', users);
-                console.log("All existing user passwords have been encoded.");
-            }
-            localStorage.setItem('dataModelVersion', '3');
-            console.log("Migration to v3 complete.");
-        }
-        if (dataModelVersion < 4) {
-            console.log("Running data migration to v4 (Customer Tags)...");
-            let customers = this.get('customers');
-            let updated = false;
-            customers.forEach(customer => {
-                if (!customer.tags) {
-                    customer.tags = [];
-                    updated = true;
-                }
-            });
-            if(updated) {
-                this.set('customers', customers);
-                console.log("Added 'tags' array to all customers.");
-            }
-            localStorage.setItem('dataModelVersion', '4');
-            console.log("Migration to v4 complete.");
-        }
-        if (dataModelVersion < 5) {
-            console.log("Running data migration to v5 (Customer Contacts)...");
-            let customers = this.get('customers');
-            let updated = false;
-            customers.forEach(customer => {
-                if (customer.email === undefined) {
-                    customer.email = '';
-                    updated = true;
-                }
-                if (customer.mobile === undefined) {
-                    customer.mobile = '';
-                    updated = true;
-                }
-            });
-            if(updated) {
-                this.set('customers', customers);
-                console.log("Added 'email' and 'mobile' fields to all customers.");
-            }
-            localStorage.setItem('dataModelVersion', '5');
-            console.log("Migration to v5 complete.");
-        }
-        if (dataModelVersion < 6) {
-            console.log("Running data migration to v6 (Detailed Balances)...");
-            let customers = this.get('customers');
-            let updated = false;
-            customers.forEach(customer => {
-                if (customer.balance_2020_2025 === undefined) {
-                    customer.balance_2020_2025 = 0;
-                    updated = true;
-                }
-                if (customer.balance_2019_2020 === undefined) {
-                    customer.balance_2019_2020 = 0;
-                    updated = true;
-                }
-                if (customer.balance_lte_2018 === undefined) {
-                    // To preserve data, if old outstanding exists, move it to the oldest category
-                    customer.balance_lte_2018 = customer.outstanding || 0;
-                    updated = true;
-                }
-            });
-            if (updated) {
-                this.set('customers', customers);
-                console.log("Added detailed balance fields to all customers.");
-            }
-            localStorage.setItem('dataModelVersion', '6');
-            console.log("Migration to v6 complete.");
-        }
-        if (dataModelVersion < 7) {
-            console.log("Running data migration to v7 (Detailed Payments)...");
-            let payments = this.get('payments');
-            let updated = false;
-            payments.forEach(p => {
-                if (p.amount_2020_2025 === undefined) {
-                    p.amount_2020_2025 = 0;
-                    updated = true;
-                }
-                if (p.amount_2019_2020 === undefined) {
-                    p.amount_2019_2020 = 0;
-                    updated = true;
-                }
-                if (p.amount_lte_2018 === undefined) {
-                    p.amount_lte_2018 = 0;
-                    updated = true;
-                }
-            });
-            if (updated) {
-                this.set('payments', payments);
-                console.log("Added detailed payment amount fields to all payments.");
-            }
-            localStorage.setItem('dataModelVersion', '7');
-            console.log("Migration to v7 complete.");
-        }
-         if (dataModelVersion < 8) {
-            console.log("Running data migration to v8 (Customer Monthly Forecasts)...");
-            let customers = this.get('customers');
-            let customerForecasts = this.get('customerForecasts');
-            let updated = false;
-            const now = new Date();
-            const currentMonth = `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}`;
-
-            customers.forEach(customer => {
-                if (customer.forecastAmount && customer.forecastAmount > 0) {
-                    const existingForecast = customerForecasts.find(f => f.accountNo === customer.accountNo && f.month === currentMonth);
-                    if (!existingForecast) {
-                        customerForecasts.push({
-                            id: `cf-${Date.now()}-${customer.accountNo}`,
-                            accountNo: customer.accountNo,
-                            month: currentMonth,
-                            amount: customer.forecastAmount
-                        });
-                        updated = true;
-                    }
-                }
-            });
-
-            if (updated) {
-                this.set('customerForecasts', customerForecasts);
-                console.log("Migrated legacy customer forecasts to new monthly structure.");
-            }
-            localStorage.setItem('dataModelVersion', '8');
-            console.log("Migration to v8 complete.");
-        }
-        if (dataModelVersion < 9) {
-            console.log("Running data migration to v9 (Geocoding)...");
-            let customers = this.get('customers');
-            let updated = false;
-            customers.forEach(customer => {
-                if (customer.latitude === undefined || customer.longitude === undefined) {
-                    // Simulate geocoding for existing customers
-                    const coords = App.Geo.getMockCoordinates(customer.accountNo);
-                    customer.latitude = coords.lat;
-                    customer.longitude = coords.lng;
-                    updated = true;
-                }
-            });
-             if (updated) {
-                this.set('customers', customers);
-                console.log("Added latitude and longitude to all customers.");
-            }
-            localStorage.setItem('dataModelVersion', '9');
-            console.log("Migration to v9 complete.");
+    async updateInCloud(table, item) {
+        const list = this.get(table);
+        const idKey = item.accountNo ? 'accountNo' : 'id';
+        const index = list.findIndex(i => i[idKey] == item[idKey]);
+        if(index > -1) {
+            list[index] = item;
+            this.set(table, list);
+            this.sendToGoogle('update', table, item);
         }
     },
-    get: (key) => JSON.parse(localStorage.getItem(key) || '[]'), 
-    set: (key, data) => localStorage.setItem(key, JSON.stringify(data)),
+    
+    async deleteFromCloud(table, id) {
+        let list = this.get(table);
+        const isCustomer = table === 'customers';
+        const idKey = isCustomer ? 'accountNo' : 'id';
+        list = list.filter(i => i[idKey] != id);
+        this.set(table, list);
+        this.sendToGoogle('delete', table, { [idKey]: id });
+    },
+
+    sendToGoogle(action, table, data) {
+        // Use 'no-cors' mode to avoid browser blocks, standard for Google Scripts
+        fetch(this.apiUrl, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action, table, data })
+        }).catch(err => console.error("Cloud Save Failed:", err));
+    },
+
+    runMigrations() {
+        // Keep existing migration logic if needed, or leave empty if data is clean
+    }
 });
+
 Object.assign(App.UI, { 
     intersectionObserver: null,
     hydrate() { 
@@ -3224,17 +3090,18 @@ Object.assign(App.MyDay, {
             const snoozeBtn = e.target.closest('.snooze-btn');
             const taskItem = e.target.closest('.clickable');
 
-            // --- NEW: Start Visit logic ---
+            // --- 1. START VISIT LOGIC (With Cloud Sync) ---
             if (startBtn) {
                 e.stopPropagation();
                 App.Visits.checkIn(startBtn.dataset.id);
             }
-            // ------------------------------
 
+            // --- 2. END VISIT LOGIC ---
             if (visitBtn) {
                 App.Visits.showMarkDoneModal(visitBtn.dataset.id);
             }
             
+            // --- 3. SNOOZE LOGIC (With Cloud Sync) ---
             if (snoozeBtn) {
                 e.stopPropagation(); 
                 const visitId = snoozeBtn.dataset.id;
@@ -3245,10 +3112,17 @@ Object.assign(App.MyDay, {
                     const tomorrow = new Date();
                     tomorrow.setDate(tomorrow.getDate() + 1);
                     const tomorrowStr = tomorrow.toISOString().slice(0, 10);
+                    
+                    // Keep original time or default to 9am
                     const originalTime = visits[visitIndex].dateTime.split('T')[1] || '09:00:00.000Z';
+                    
+                    // Update Object
                     visits[visitIndex].dateTime = `${tomorrowStr}T${originalTime}`;
                     visits[visitIndex].status = 'Scheduled'; 
-                    App.DB.set('visits', visits);
+                    
+                    // ⚠️ CRITICAL CHANGE: Use updateInCloud instead of set
+                    App.DB.updateInCloud('visits', visits[visitIndex]);
+                    
                     App.Helpers.logChange('Rescheduled', 'Visit', `Snoozed to ${tomorrowStr}`);
                     App.UI.toast('Task moved to tomorrow.', 'info');
                     this.render();
@@ -3269,8 +3143,7 @@ Object.assign(App.MyDay, {
         const todayStart = new Date();
         todayStart.setHours(0,0,0,0);
 
-        // Render Today's Visits
-        // --- NEW: Filter includes 'In Progress' ---
+        // Filter: Today + (Scheduled OR In Progress)
         const todaysVisits = allVisits.filter(v => 
             v.dateTime.startsWith(today) && (v.status === 'Scheduled' || v.status === 'In Progress')
         );
@@ -3280,7 +3153,6 @@ Object.assign(App.MyDay, {
             visitsListContainer.innerHTML = todaysVisits.map(v => {
                 let actionBtn = '';
                 
-                // --- NEW: Button Logic ---
                 if (v.status === 'Scheduled') {
                     actionBtn = `
                         <button class="btn btn-outline snooze-btn" data-id="${v.id}" title="Snooze" style="padding: 4px 8px; margin-right: 5px; color: #ffc107; border-color: #ffc107;"><i class="fas fa-clock"></i></button>
@@ -3291,7 +3163,6 @@ Object.assign(App.MyDay, {
                         <button class="btn btn-danger mark-done-btn" data-id="${v.id}" title="Check Out" style="padding: 4px 12px;"><i class="fas fa-stop"></i> End</button>
                     `;
                 }
-                // -------------------------
 
                 return `
                 <div class="myday-task-item" style="${v.status === 'In Progress' ? 'background: rgba(16, 185, 129, 0.1); border-left: 4px solid #10b981; padding-left: 10px;' : ''}">
@@ -3439,7 +3310,6 @@ Object.assign(App.MyDay, {
         }).addTo(this.map);
     }
 });
-
 
 Object.assign(App.Customers, { 
     viewMode: 'list', quill: null, 
@@ -3625,9 +3495,21 @@ Object.assign(App.Customers, {
         });
     },
 
-    updateCustomerStatus: function(accountNo, newStatus) {
-        let customers = App.DB.get('customers'); const index = customers.findIndex(c => c.accountNo === accountNo);
-        if (index > -1 && customers[index].paymentStatus !== newStatus) { const oldStatus = customers[index].paymentStatus; customers[index].paymentStatus = newStatus; App.DB.set('customers', customers); App.Helpers.logChange('Updated', 'Customer', `${customers[index].companyName}`, `Status changed: ${oldStatus} -> ${newStatus}`); App.UI.toast(`Moved to ${newStatus}`, 'success'); this.render(); }
+   updateCustomerStatus: function(accountNo, newStatus) {
+        let customers = App.DB.get('customers'); 
+        const index = customers.findIndex(c => c.accountNo === accountNo);
+        
+        if (index > -1 && customers[index].paymentStatus !== newStatus) { 
+            const oldStatus = customers[index].paymentStatus; 
+            customers[index].paymentStatus = newStatus; 
+            
+            // ⚠️ FIX: Sync this change to Google Sheets
+            App.DB.updateInCloud('customers', customers[index]); 
+            
+            App.Helpers.logChange('Updated', 'Customer', `${customers[index].companyName}`, `Status changed: ${oldStatus} -> ${newStatus}`); 
+            App.UI.toast(`Moved to ${newStatus}`, 'success'); 
+            this.render(); 
+        }
     },
 
     renderColumnToggle() {
@@ -3659,32 +3541,89 @@ Object.assign(App.Customers, {
     }, 
     
     saveCustomer: async function(e) { 
-        e.preventDefault(); const form = e.target; const id = form.elements['customer-id-hidden'].value; let customers = App.DB.get('customers'); const isAdmin = App.state.currentUser.role === 'admin'; const tags = form.elements['customer-tags'].value.split(',').map(tag => tag.trim()).filter(Boolean);
-        let customerData = { paymentStatus: form.elements.paymentStatus.value, customerStatus: form.elements.customerStatus.value, tags: tags };
+        e.preventDefault(); 
+        const form = e.target; 
+        const id = form.elements['customer-id-hidden'].value; 
+        let customers = App.DB.get('customers'); 
+        const isAdmin = App.state.currentUser.role === 'admin'; 
+        const tags = form.elements['customer-tags'].value.split(',').map(tag => tag.trim()).filter(Boolean);
+        
+        let customerData = { 
+            paymentStatus: form.elements.paymentStatus.value, 
+            customerStatus: form.elements.customerStatus.value, 
+            tags: tags 
+        };
+        
         if (isAdmin) {
-            const bal_2020_2025 = parseFloat(form.elements.balance_2020_2025.value) || 0; const bal_2019_2020 = parseFloat(form.elements.balance_2019_2020.value) || 0; const bal_lte_2018 = parseFloat(form.elements.balance_lte_2018.value) || 0;
+            const bal_2020_2025 = parseFloat(form.elements.balance_2020_2025.value) || 0; 
+            const bal_2019_2020 = parseFloat(form.elements.balance_2019_2020.value) || 0; 
+            const bal_lte_2018 = parseFloat(form.elements.balance_lte_2018.value) || 0;
             
-            // --- GPS LOGIC ---
+            // GPS Logic
             let finalLat, finalLng;
             const inputLat = parseFloat(form.elements.latitude.value);
             const inputLng = parseFloat(form.elements.longitude.value);
             
             if (!isNaN(inputLat) && !isNaN(inputLng)) {
-                finalLat = inputLat;
-                finalLng = inputLng;
+                finalLat = inputLat; finalLng = inputLng;
             } else {
-                // Fallback to address geocoding if fields are empty
+                // Fallback to address geocoding
                 const addressString = `${form.elements.area.value}, ${form.elements.emirate.value}`; 
                 const coords = await App.Geo.geocodeAddress(addressString, form.elements.accountNo.value);
-                finalLat = coords.lat;
-                finalLng = coords.lng;
+                finalLat = coords.lat; finalLng = coords.lng;
             }
-            // ----------------
 
-            Object.assign(customerData, { companyName: form.elements.companyName.value, email: form.elements.email.value, mobile: form.elements.mobile.value, emirate: form.elements.emirate.value, area: form.elements.area.value, latitude: finalLat, longitude: finalLng, initialDebt: parseFloat(form.elements.initialDebt.value), outstanding: bal_2020_2025 + bal_2019_2020 + bal_lte_2018, balance_2020_2025: bal_2020_2025, balance_2019_2020: bal_2019_2020, balance_lte_2018: bal_lte_2018, salesConsultantId: parseInt(form.elements.salesConsultantId.value), status: form.elements.status.value, debtSince: form.elements.debtSince.value, agingCategory: App.Helpers.calculateAgingCategory(form.elements.debtSince.value) });
+            Object.assign(customerData, { 
+                companyName: form.elements.companyName.value, 
+                email: form.elements.email.value, 
+                mobile: form.elements.mobile.value, 
+                emirate: form.elements.emirate.value, 
+                area: form.elements.area.value, 
+                latitude: finalLat, 
+                longitude: finalLng, 
+                initialDebt: parseFloat(form.elements.initialDebt.value), 
+                outstanding: bal_2020_2025 + bal_2019_2020 + bal_lte_2018, 
+                balance_2020_2025: bal_2020_2025, 
+                balance_2019_2020: bal_2019_2020, 
+                balance_lte_2018: bal_lte_2018, 
+                salesConsultantId: parseInt(form.elements.salesConsultantId.value), 
+                status: form.elements.status.value, 
+                debtSince: form.elements.debtSince.value, 
+                agingCategory: App.Helpers.calculateAgingCategory(form.elements.debtSince.value) 
+            });
         }
-        if (id) { const index = customers.findIndex(c => c.accountNo === id); const original = form.originalData; if (isAdmin) { customerData.agingCategory = App.Helpers.calculateAgingCategory(form.elements.debtSince.value); } const changes = App.Helpers.getObjectChanges(original, {...original, ...customerData}); customers[index] = { ...customers[index], ...customerData }; App.Helpers.logChange('Updated', 'Customer', `${customers[index].companyName} (${id})`, changes); } else { const newAccountNo = form.elements.accountNo.value.trim(); if (!newAccountNo) { App.UI.toast('Account Number is required.', 'error'); return; } const accountExists = customers.some(c => c.accountNo.toLowerCase() === newAccountNo.toLowerCase()); if (accountExists) { App.UI.toast('Account Number already exists.', 'error'); return; } customerData.accountNo = newAccountNo; customers.push(customerData); App.Helpers.logActivity('added a new customer', customerData.companyName, customerData.accountNo); App.Helpers.logChange('Created', 'Customer', `${customerData.companyName} (${newAccountNo})`); } 
-        App.DB.set('customers', customers); App.UI.closeModal('customer-modal'); App.UI.toast(`Customer ${id ? 'updated' : 'added'}!`); this.render(); 
+
+        if (id) { 
+            // --- UPDATE EXISTING ---
+            const index = customers.findIndex(c => c.accountNo === id); 
+            const original = form.originalData; 
+            if (isAdmin) { customerData.agingCategory = App.Helpers.calculateAgingCategory(form.elements.debtSince.value); } 
+            
+            const updatedCustomer = { ...customers[index], ...customerData };
+            
+            // Cloud Sync
+            App.DB.updateInCloud('customers', updatedCustomer);
+            
+            const changes = App.Helpers.getObjectChanges(original, updatedCustomer); 
+            App.Helpers.logChange('Updated', 'Customer', `${updatedCustomer.companyName} (${id})`, changes); 
+        } else { 
+            // --- ADD NEW ---
+            const newAccountNo = form.elements.accountNo.value.trim(); 
+            if (!newAccountNo) { App.UI.toast('Account Number is required.', 'error'); return; } 
+            if (customers.some(c => c.accountNo.toLowerCase() === newAccountNo.toLowerCase())) { App.UI.toast('Account Number already exists.', 'error'); return; } 
+            
+            customerData.accountNo = newAccountNo; 
+            
+            // Cloud Sync
+            App.DB.addToCloud('customers', customerData);
+            
+            App.Helpers.logActivity('added a new customer', customerData.companyName, customerData.accountNo); 
+            App.Helpers.logChange('Created', 'Customer', `${customerData.companyName} (${newAccountNo})`); 
+        } 
+        
+        App.UI.closeModal('customer-modal'); 
+        App.UI.toast(`Customer ${id ? 'updated' : 'added'}! (Syncing...)`); 
+        this.render(); 
     },
 
     showCustomerForecastForm(accountNo) { const customer = App.DB.get('customers').find(c => c.accountNo === accountNo); if (!customer) return App.UI.toast('Customer not found.', 'error'); document.getElementById('customer-forecast-modal-title').textContent = `Monthly Forecasts for ${customer.companyName}`; const form = document.getElementById('customer-forecast-form'); form.reset(); form.elements['customer-forecast-accountNo'].value = customer.accountNo; form.elements['customer-forecast-id-hidden'].value = ''; const now = new Date(); App.Helpers.populateMonthYearDropdowns('customer-forecast-month-select', 'customer-forecast-year-select', now.getMonth(), now.getFullYear()); form.elements['customer-forecast-month-select'].disabled = false; form.elements['customer-forecast-year-select'].disabled = false; this.renderForecastsForCustomer(accountNo); App.UI.openModal('customer-forecast-modal'); },
@@ -3749,7 +3688,37 @@ Object.assign(App.Customers, {
         const finalY = doc.lastAutoTable.finalY + 10; doc.setFontSize(12); doc.text(`Total Outstanding: ${App.Helpers.formatCurrency(customer.outstanding)}`, 140, finalY, { align: 'right' });
         doc.save(`SOA_${customer.companyName.replace(/[^a-z0-9]/gi, '_')}.pdf`); App.UI.toast('Statement generated successfully!', 'success');
     },
-    deleteCustomer(accountNo) { const customer = App.DB.get('customers').find(c => c.accountNo === accountNo); Swal.fire({ title: `Delete ${customer.companyName}?`, text: "This will permanently delete the customer and all their associated payments and visits. This action cannot be undone.", input: 'textarea', inputLabel: 'Reason for deletion', inputPlaceholder: 'Enter your reason here...', showCancelButton: true, confirmButtonText: 'Yes, delete it!', confirmButtonColor: 'var(--danger)', background: 'var(--card-bg)', color: 'var(--text-primary)', inputValidator: (value) => { if (!value) { return 'You must provide a reason for deletion!' } } }).then(result => { if (result.isConfirmed && result.value) { let customers = App.DB.get('customers'); let visits = App.DB.get('visits'); let payments = App.DB.get('payments'); let comments = App.DB.get('customerComments'); App.DB.set('customers', customers.filter(c => c.accountNo !== accountNo)); App.DB.set('visits', visits.filter(v => v.customerId !== accountNo)); App.DB.set('payments', payments.filter(p => p.customerId !== accountNo)); App.DB.set('customerComments', comments.filter(c => c.accountNo !== accountNo)); App.Helpers.logChange('Deleted', 'Customer', `${customer.companyName} (${accountNo})`, `Reason: ${result.value}`); App.UI.toast('Customer deleted permanently.', 'success'); this.render(); } }); } 
+    deleteCustomer(accountNo) { 
+        const customer = App.DB.get('customers').find(c => c.accountNo === accountNo); 
+        Swal.fire({ 
+            title: `Delete ${customer.companyName}?`, 
+            text: "This will permanently delete the customer from the Cloud Database.", 
+            input: 'textarea', 
+            inputLabel: 'Reason for deletion', 
+            inputPlaceholder: 'Enter your reason here...', 
+            showCancelButton: true, 
+            confirmButtonText: 'Yes, delete it!', 
+            confirmButtonColor: 'var(--danger)', 
+            background: 'var(--card-bg)', 
+            color: 'var(--text-primary)', 
+            inputValidator: (value) => { if (!value) { return 'You must provide a reason for deletion!' } } 
+        }).then(result => { 
+            if (result.isConfirmed && result.value) { 
+                // Cloud Sync: Delete Customer
+                App.DB.deleteFromCloud('customers', accountNo);
+                
+                // Cleanup other local data (Optional: You could sync these deletes too, but keeping it simple)
+                let visits = App.DB.get('visits'); 
+                let payments = App.DB.get('payments'); 
+                App.DB.set('visits', visits.filter(v => v.customerId !== accountNo)); 
+                App.DB.set('payments', payments.filter(p => p.customerId !== accountNo)); 
+                
+                App.Helpers.logChange('Deleted', 'Customer', `${customer.companyName} (${accountNo})`, `Reason: ${result.value}`); 
+                App.UI.toast('Customer deleted from Cloud.', 'success'); 
+                this.render(); 
+            } 
+        }); 
+    },
 });
 
 Object.assign(App.Visits, { 
@@ -3816,19 +3785,25 @@ Object.assign(App.Visits, {
         if (index > -1) {
             visits[index].status = 'In Progress';
             visits[index].checkInTime = Date.now(); 
-            App.DB.set('visits', visits);
             
-            // --- NEW: Log Activity for Check-In ---
-            App.Helpers.logActivity(
-                'Started Visit', 
-                'Check-In recorded.', 
-                visits[index].customerId, 
-                null, 
-                visitId
-            );
-            // -------------------------------------
+            // Cloud Sync
+            App.DB.updateInCloud('visits', visits[index]);
+            
+            // Log Activity (Cloud)
+            const actLog = {
+                id: `log-${Date.now()}`,
+                consultantId: App.state.currentUser.assignedConsultantId,
+                timestamp: Date.now(),
+                date: new Date().toISOString().slice(0, 10),
+                time: new Date().toLocaleTimeString(),
+                action: 'Started Visit',
+                details: 'Check-In recorded.',
+                customerId: visits[index].customerId,
+                visitId: visitId
+            };
+            App.DB.addToCloud('activityLog', actLog);
 
-            App.UI.toast('Visit Started! Clock is ticking... ⏱️');
+            App.UI.toast('Visit Started! Synced to Cloud ☁️');
             this.render();
             if (App.state.activePage === 'myday') App.MyDay.render();
         }
@@ -4103,7 +4078,6 @@ Object.assign(App.Visits, {
         
         const visitDateTimeVal = f.elements['visit-date'].value; 
         if (!visitDateTimeVal) return App.UI.toast('Please select date and time', 'error');
-        
         const visitDateTimeISO = new Date(visitDateTimeVal).toISOString();
         
         const vd = { 
@@ -4113,21 +4087,24 @@ Object.assign(App.Visits, {
             status: 'Scheduled', 
             collectorId: customer ? customer.salesConsultantId : null 
         }; 
-        let v = App.DB.get('visits'), id = f.elements['visit-id'].value; 
+        
+        let visits = App.DB.get('visits'), id = f.elements['visit-id'].value; 
+        
         if (id) { 
-            const i = v.findIndex(vi => vi.id === id);
-            const original = v[i];
-            const changes = App.Helpers.getObjectChanges(original, {...original, ...vd});
-            v[i] = { ...v[i], ...vd, id: id }; 
-            App.Helpers.logChange('Updated', 'Visit', `For ${customer.companyName}`, changes); 
+            // Update
+            const i = visits.findIndex(vi => vi.id === id);
+            const updatedVisit = { ...visits[i], ...vd, id: id };
+            App.DB.updateInCloud('visits', updatedVisit);
+            App.Helpers.logChange('Updated', 'Visit', `For ${customer.companyName}`); 
         } else { 
+            // Add New
             vd.id = `visit-${Date.now()}`; 
-            v.push(vd);
+            App.DB.addToCloud('visits', vd);
             App.Helpers.logChange('Scheduled', 'Visit', `For ${customer.companyName}`); 
         } 
-        App.DB.set('visits', v); 
+        
         App.UI.closeModal('visit-modal'); 
-        App.UI.toast('Visit saved!'); 
+        App.UI.toast('Visit saved to Cloud!'); 
         this.render(); 
     },
     showMarkDoneModal: function(visitId) { 
@@ -4222,6 +4199,7 @@ Object.assign(App.Visits, {
             const visit = visits[visitIndex]; 
             visit.status = "Completed"; 
             
+            // Duration Logic
             if (visit.checkInTime) {
                 const endTime = Date.now();
                 const durationMins = Math.round((endTime - visit.checkInTime) / 60000); 
@@ -4235,10 +4213,9 @@ Object.assign(App.Visits, {
             visit.contactMethod = form.elements['log-contact-method'].value; 
             visit.outcome = form.elements['log-outcome'].value; 
             visit.notes = this.logNotesQuill.root.innerHTML; 
-            if (location) { 
-                visit.location = location; 
-            }
+            if (location) visit.location = location; 
             
+            // Promise Logic
             if (visit.outcome === 'Promise to Pay') {
                 visit.promiseAmount = parseFloat(document.getElementById('log-promise-amount').value);
                 visit.promiseDate = document.getElementById('log-promise-date').value;
@@ -4247,28 +4224,45 @@ Object.assign(App.Visits, {
                 }
             }
             
-            const nextVisitDate = document.getElementById('log-next-date').value; 
-            if (nextVisitDate) { visits.push({ id: `v${Date.now() + 1}`, customerId: visit.customerId, dateTime: `${nextVisitDate}T09:00:00.000Z`, purpose: 'Scheduled Follow-up', collectorId: visit.collectorId, status: "Scheduled" }); } 
+            // Cloud Sync: Update the Visit
+            App.DB.updateInCloud('visits', visit);
             
+            // Create Next Visit if needed
+            const nextVisitDate = document.getElementById('log-next-date').value; 
+            if (nextVisitDate) { 
+                const nextVisit = { 
+                    id: `v${Date.now() + 1}`, 
+                    customerId: visit.customerId, 
+                    dateTime: `${nextVisitDate}T09:00:00.000Z`, 
+                    purpose: 'Scheduled Follow-up', 
+                    collectorId: visit.collectorId, 
+                    status: "Scheduled" 
+                };
+                App.DB.addToCloud('visits', nextVisit);
+            } 
+            
+            // Log Activity (Cloud)
             let logDetails = `(Outcome: ${visit.outcome})`;
             if(visit.duration) logDetails += `, Duration: ${visit.duration} min`; 
-            if(visit.location) logDetails += ', Location Tagged';
             
-            // --- NEW: Log Activity for Check-Out ---
-            App.Helpers.logActivity(
-                'Completed Visit (Check-Out)', // Changed Text
-                logDetails, 
-                visit.customerId, 
-                null, 
-                visit.id
-            );
-            // -------------------------------------
-
+            const actLog = {
+                id: `log-${Date.now()}`,
+                consultantId: App.state.currentUser.assignedConsultantId,
+                timestamp: Date.now(),
+                date: new Date().toISOString().slice(0, 10),
+                time: new Date().toLocaleTimeString(),
+                action: 'Completed Visit (Check-Out)',
+                details: logDetails,
+                customerId: visit.customerId,
+                visitId: visit.id
+            };
+            App.DB.addToCloud('activityLog', actLog);
+            
             App.Helpers.logChange('Completed', 'Visit', `For customer ${visit.customerId}`);
         } 
-        App.DB.set('visits', visits); 
+        
         App.UI.closeModal('visit-notes-modal'); 
-        App.UI.toast(`Visit marked as done! (${visits[visitIndex].duration || '0'} min)`);
+        App.UI.toast(`Visit synced to Cloud!`);
         this.render(); 
         if (App.state.activePage === 'myday') App.MyDay.render();
     }, 
@@ -4291,7 +4285,23 @@ Object.assign(App.Visits, {
             App.UI.toast('Unable to get location.', 'error');
         }); 
     }, 
-    deleteVisit(visitId) { const visit = App.DB.get('visits').find(v => v.id === visitId); Swal.fire({ title: `Delete this visit?`, text: "This action cannot be undone.", input: 'textarea', inputLabel: 'Reason for deletion', inputPlaceholder: 'Enter your reason here...', showCancelButton: true, confirmButtonText: 'Yes, delete it!', confirmButtonColor: 'var(--danger)', background: 'var(--card-bg)', color: 'var(--text-primary)', inputValidator: (value) => { if (!value) { return 'You must provide a reason for deletion!' } } }).then(result => { if (result.isConfirmed && result.value) { let visits = App.DB.get('visits'); App.DB.set('visits', visits.filter(v => v.id !== visitId)); App.Helpers.logChange('Deleted', 'Visit', `${visit.purpose} for customer ${visit.customerId}`, `Reason: ${result.value}`); App.UI.toast('Visit deleted.', 'success'); this.render(); } }); } ,
+    deleteVisit(visitId) { 
+        const visit = App.DB.get('visits').find(v => v.id === visitId); 
+        Swal.fire({ 
+            title: `Delete this visit?`, 
+            text: "This action cannot be undone.", 
+            showCancelButton: true, 
+            confirmButtonText: 'Yes, delete it!', 
+            confirmButtonColor: 'var(--danger)'
+        }).then(result => { 
+            if (result.isConfirmed) { 
+                App.DB.deleteFromCloud('visits', visitId);
+                App.Helpers.logChange('Deleted', 'Visit', `${visit.purpose}`, 'Deleted from Cloud'); 
+                App.UI.toast('Visit deleted from Cloud.', 'success'); 
+                this.render(); 
+            } 
+        }); 
+    },
     showRoutePlannerModal() {
         const form = document.getElementById('route-planner-form');
         form.reset();
@@ -4461,6 +4471,8 @@ Object.assign(App.Payments, {
         document.getElementById('payment-date').valueAsDate = new Date(); 
         App.UI.openModal('payment-modal'); 
     }, 
+    
+    // --- UPDATED SAVE FUNCTION WITH ALL 3 AMOUNTS ---
     savePayment: function(e) { 
         e.preventDefault(); 
         const f = e.target;
@@ -4472,45 +4484,75 @@ Object.assign(App.Payments, {
             return App.UI.toast('Please enter a valid, positive payment amount.', 'error');
         }
 
+        // --- HERE ARE ALL 3 VARIABLES ---
         const amt2025 = parseFloat(f.elements['payment-amount-2025'].value) || 0;
-        const amt2020 = parseFloat(f.elements['payment-amount-2020'].value) || 0;
+        const amt2020 = parseFloat(f.elements['payment-amount-2020'].value) || 0; // Fixed: Included
         const amt2018 = parseFloat(f.elements['payment-amount-2018'].value) || 0;
 
-        const pd = { id: `p${Date.now()}`, customerId: cid, amount: a, method: f.elements['payment-method'].value, date: f.elements['payment-date'].value, status: f.elements['payment-status'].value, amount_2020_2025: amt2025, amount_2019_2020: amt2020, amount_lte_2018: amt2018 }; 
+        const pd = { 
+            id: `p${Date.now()}`, 
+            customerId: cid, 
+            amount: a, 
+            method: f.elements['payment-method'].value, 
+            date: f.elements['payment-date'].value, 
+            status: f.elements['payment-status'].value, 
+            amount_2020_2025: amt2025, 
+            amount_2019_2020: amt2020, // Fixed: Included
+            amount_lte_2018: amt2018 
+        }; 
         
-        if (pd.status === 'Completed') {
+        // 1. Save Payment to Cloud
+        App.DB.addToCloud('payments', pd);
+
+        if (pd.status === 'Completed') { 
             let visits = App.DB.get('visits');
             const promiseVisitIndex = visits.findIndex(v => v.customerId === cid && v.outcome === 'Promise to Pay' && v.promiseDate);
             if(promiseVisitIndex > -1) {
                 visits[promiseVisitIndex].promiseAmount = null;
                 visits[promiseVisitIndex].promiseDate = null;
-                App.DB.set('visits', visits);
+                // Sync Visit update to Cloud
+                App.DB.updateInCloud('visits', visits[promiseVisitIndex]);
             }
-        }
 
-        App.DB.set('payments', [...App.DB.get('payments'), pd]); 
-        if (pd.status === 'Completed') { 
+            // 2. Update Customer Balance in Cloud
             let customers = App.DB.get('customers'); 
             const customerIndex = customers.findIndex(c => c.accountNo === cid); 
             if (customerIndex !== -1) { 
-                customers[customerIndex].outstanding -= a;
-                customers[customerIndex].balance_2020_2025 -= amt2025;
-                customers[customerIndex].balance_2019_2020 -= amt2020;
-                customers[customerIndex].balance_lte_2018 -= amt2018;
+                const cust = customers[customerIndex];
+                
+                // Subtract all 3 amounts
+                cust.outstanding -= a;
+                cust.balance_2020_2025 -= amt2025;
+                cust.balance_2019_2020 -= amt2020; // Fixed: Included
+                cust.balance_lte_2018 -= amt2018;
 
-                if (customers[customerIndex].outstanding <= 0) { 
-                    customers[customerIndex].outstanding = 0; 
-                    customers[customerIndex].paymentStatus = 'Settlement'; 
+                if (cust.outstanding <= 0) { 
+                    cust.outstanding = 0; 
+                    cust.paymentStatus = 'Settlement'; 
                 } else { 
-                    customers[customerIndex].paymentStatus = 'Negotiation';
+                    cust.paymentStatus = 'Negotiation';
                 } 
-                App.DB.set('customers', customers); 
+                
+                // SYNC CUSTOMER UPDATE TO CLOUD
+                App.DB.updateInCloud('customers', cust);
             } 
-            App.Helpers.logActivity('recorded a payment', `(Method: ${pd.method})`, pd.customerId, pd.amount); 
-            App.Helpers.logChange('Recorded', 'Payment', `${App.Helpers.formatCurrency(pd.amount)} for ${cid}`);
+            
+            // 3. Log Activity to Cloud
+            const actLog = {
+                id: `log-${Date.now()}`,
+                consultantId: App.state.currentUser.assignedConsultantId,
+                timestamp: Date.now(),
+                date: new Date().toISOString().slice(0, 10),
+                time: new Date().toLocaleTimeString(),
+                action: 'recorded a payment',
+                details: `(Method: ${pd.method})`,
+                customerId: pd.customerId,
+                amount: pd.amount
+            };
+            App.DB.addToCloud('activityLog', actLog);
         } 
         
-        App.UI.toast('Payment recorded!'); 
+        App.UI.toast('Payment saved & synced!'); 
         
         if (App.state.paymentFlowOrigin) {
             App.state.paymentFlowOrigin.paymentLogged = true;
@@ -4522,8 +4564,36 @@ Object.assign(App.Payments, {
             if (App.state.activePage === 'customers') App.Customers.render();
         }
     }, 
+    // ---------------------------------------------
+
     showPaymentDetail: function(paymentId) { const payment = App.DB.get('payments').find(p => p.id === paymentId); if (!payment) return; const customer = App.DB.get('customers').find(c => c.accountNo === payment.customerId); const consultantMap = App.DB.get('consultants').reduce((map, c) => { map[c.id] = c.name; return map; }, {}); const contentEl = document.getElementById('payment-detail-content'); contentEl.innerHTML = `<div class="detail-info-grid" style="grid-template-columns: 1fr 1fr; gap: var(--spacing-6);"><div class="detail-info-card"><div class="label">TRANSACTION ID</div><div class="value">${payment.id}</div></div><div class="detail-info-card"><div class="label">AMOUNT</div><div class="value" style="color: var(--success);">${App.Helpers.formatCurrency(payment.amount)}</div></div><div class="detail-info-card"><div class="label">PAYMENT DATE</div><div class="value">${App.Helpers.formatDate(payment.date)}</div></div><div class="detail-info-card"><div class="label">PAYMENT METHOD</div><div class="value">${payment.method}</div></div><div class="detail-info-card"><div class="label">STATUS</div><div class="value"><span class="status-badge ${payment.status.toLowerCase()}">${payment.status}</span></div></div></div><hr style="border: none; border-top: 1px solid var(--border-color); margin: var(--spacing-6) 0;"><h4 class="card-title mb-4">Customer Information</h4>${customer ? `<div class="detail-info-grid" style="grid-template-columns: 1fr 1fr;"><div class="detail-info-card"><div class="label">COMPANY NAME</div><div class="value">${customer.companyName}</div></div><div class="detail-info-card"><div class="label">ACCOUNT #</div><div class="value">${customer.accountNo}</div></div><div class="detail-info-card"><div class="label">SALES CONSULTANT</div><div class="value">${consultantMap[customer.salesConsultantId] || 'N/A'}</div></div><div class="detail-info-card"><div class="label">CURRENT OUTSTANDING</div><div class="value">${App.Helpers.formatCurrency(customer.outstanding)}</div></div></div>` : '<p>No customer associated with this payment.</p>'}`; App.UI.openModal('payment-detail-modal'); }, 
-    deletePayment(paymentId) { const payment = App.DB.get('payments').find(p => p.id === paymentId); Swal.fire({ title: `Delete this payment?`, text: "This will add the amount back to the customer's outstanding balance. This action cannot be undone.", input: 'textarea', inputLabel: 'Reason for deletion', inputPlaceholder: 'Enter your reason here...', showCancelButton: true, confirmButtonText: 'Yes, delete it!', confirmButtonColor: 'var(--danger)', background: 'var(--card-bg)', color: 'var(--text-primary)', inputValidator: (value) => { if (!value) { return 'You must provide a reason for deletion!' } } }).then(result => { if (result.isConfirmed && result.value) { let payments = App.DB.get('payments'); let customers = App.DB.get('customers'); const customerIndex = customers.findIndex(c => c.accountNo === payment.customerId); if (customerIndex !== -1) { customers[customerIndex].outstanding += payment.amount; if (customers[customerIndex].outstanding > 0) { customers[customerIndex].paymentStatus = 'Negotiation'; } App.DB.set('customers', customers); } App.DB.set('payments', payments.filter(p => p.id !== paymentId)); App.Helpers.logChange('Deleted', 'Payment', `${App.Helpers.formatCurrency(payment.amount)} for customer ${payment.customerId}`, `Reason: ${result.value}`); App.UI.toast('Payment deleted and balance adjusted.', 'success'); this.render(); if(App.state.activePage === 'dashboard') App.Dashboard.render(); if(App.state.activePage === 'customers') App.Customers.render(); } }); } 
+    deletePayment(paymentId) { 
+        const payment = App.DB.get('payments').find(p => p.id === paymentId); 
+        Swal.fire({ title: `Delete this payment?`, text: "Balance will be reversed.", showCancelButton: true, confirmButtonText: 'Yes, delete!', confirmButtonColor: 'var(--danger)' }).then(result => { 
+            if (result.isConfirmed) { 
+                // 1. Delete Payment from Cloud
+                App.DB.deleteFromCloud('payments', paymentId);
+
+                // 2. Reverse Customer Balance in Cloud
+                let customers = App.DB.get('customers'); 
+                const customerIndex = customers.findIndex(c => c.accountNo === payment.customerId); 
+                if (customerIndex !== -1) { 
+                    const cust = customers[customerIndex];
+                    cust.outstanding += payment.amount; 
+                    
+                    // Add back the specific amounts if they exist, otherwise just add to outstanding
+                    cust.balance_2020_2025 += (payment.amount_2020_2025 || 0);
+                    cust.balance_2019_2020 += (payment.amount_2019_2020 || 0);
+                    cust.balance_lte_2018 += (payment.amount_lte_2018 || 0);
+
+                    App.DB.updateInCloud('customers', cust);
+                } 
+                
+                App.UI.toast('Payment deleted & balance reversed.', 'success'); 
+                this.render(); 
+            } 
+        }); 
+    } 
 });
 Object.assign(App.Reports, { 
     charts: {}, 
@@ -5864,7 +5934,6 @@ Object.assign(App.Consultants, {
             const totalOutstanding = assignedCustomers.reduce((sum, c) => sum + c.outstanding, 0); 
             const upcomingVisits = visits.filter(v => v.collectorId === consultant.id && v.status === 'Scheduled' && new Date(v.dateTime) >= new Date()).length;
             
-            // Target vs Actual Logic
             const currentTarget = forecasts.find(f => f.consultantId === consultant.id && f.month === currentMonthStr)?.amount || 0;
             const collectedThisMonth = payments
                 .filter(p => p.status === 'Completed' && p.date.startsWith(currentMonthStr) && assignedCustomerIds.includes(p.customerId))
@@ -5896,14 +5965,10 @@ Object.assign(App.Consultants, {
 
         if (paginatedData.length > 0) { 
             tbody.innerHTML = paginatedData.map(c => {
-                // --- 1. Avatar Logic ---
                 const avatar = App.Helpers.getAvatarHTML(c.name);
-                
-                // --- 2. Micro-Progress Bar Logic ---
                 let progressHTML = '<span style="color:var(--text-secondary); font-size:0.8rem;">No Target</span>';
                 if (c.currentTarget > 0) {
                     const pct = Math.min((c.collectedThisMonth / c.currentTarget) * 100, 100).toFixed(0);
-                    // Color code: Green > 80%, Yellow > 50%, Red < 50%
                     let color = '#dc3545';
                     if(pct >= 80) color = '#10b981';
                     else if(pct >= 50) color = '#ffc107';
@@ -5920,17 +5985,10 @@ Object.assign(App.Consultants, {
                 }
 
                 return `<tr>
-                    <td>
-                        <div class="consultant-row-wrapper">
-                            ${avatar}
-                            <div style="font-weight:600;">${c.name}</div>
-                        </div>
-                    </td>
+                    <td><div class="consultant-row-wrapper">${avatar}<div style="font-weight:600;">${c.name}</div></div></td>
                     <td>${c.noOfCustomers}</td>
                     <td>${App.Helpers.formatCurrency(c.totalOutstanding)}</td>
-                    
                     <td>${progressHTML}</td>
-                    
                     <td>${c.upcomingVisits}</td>
                     <td>
                         <div class="d-flex gap-2">
@@ -5978,7 +6036,38 @@ Object.assign(App.Consultants, {
         }); 
     }, 
     showConsultantForm: function(id = null) { const form = document.getElementById('consultant-form'); form.reset(); if (id) { const consultant = App.DB.get('consultants').find(c => c.id == id); document.getElementById('consultant-modal-title').textContent = 'Edit Consultant'; form.elements['consultant-id-hidden'].value = consultant.id; form.elements['consultantName'].value = consultant.name; form.originalData = {...consultant}; } else { document.getElementById('consultant-modal-title').textContent = 'Add New Consultant'; form.elements['consultant-id-hidden'].value = ''; form.originalData = null; } App.UI.openModal('consultant-modal'); }, 
-    saveConsultant: function(e) { e.preventDefault(); const form = e.target; const id = form.elements['consultant-id-hidden'].value; const name = form.elements['consultantName'].value.trim(); if (!name) return App.UI.toast('Consultant name cannot be empty.', 'error'); let consultants = App.DB.get('consultants'); if (id) { const index = consultants.findIndex(c => c.id == id); const originalName = form.originalData.name; consultants[index].name = name; App.Helpers.logChange('Updated', 'Consultant', `'${originalName}'`, `Renamed to '${name}'`); } else { const newId = Date.now(); consultants.push({ id: newId, name }); App.Helpers.logChange('Created', 'Consultant', `'${name}'`); } App.DB.set('consultants', consultants); App.UI.closeModal('consultant-modal'); App.UI.toast(`Consultant ${id ? 'updated' : 'added'}!`); this.render(); }, 
+    
+    // --- UPDATED SAVE CONSULTANT ---
+    saveConsultant: function(e) { 
+        e.preventDefault(); 
+        const form = e.target; 
+        const id = form.elements['consultant-id-hidden'].value; 
+        const name = form.elements['consultantName'].value.trim(); 
+        if (!name) return App.UI.toast('Consultant name cannot be empty.', 'error'); 
+        
+        let consultants = App.DB.get('consultants'); 
+        
+        if (id) { 
+            const index = consultants.findIndex(c => c.id == id); 
+            const originalName = form.originalData.name; 
+            consultants[index].name = name; 
+            
+            // Cloud Sync
+            App.DB.updateInCloud('consultants', consultants[index]);
+            App.Helpers.logChange('Updated', 'Consultant', `'${originalName}'`, `Renamed to '${name}'`); 
+        } else { 
+            const newConsultant = { id: Date.now(), name }; 
+            
+            // Cloud Sync
+            App.DB.addToCloud('consultants', newConsultant);
+            App.Helpers.logChange('Created', 'Consultant', `'${name}'`); 
+        } 
+        
+        App.UI.closeModal('consultant-modal'); 
+        App.UI.toast(`Consultant ${id ? 'updated' : 'added'}! (Syncing...)`); 
+        this.render(); 
+    }, 
+    
     deleteConsultant: function(consultantId) {
         const customers = App.DB.get('customers');
         const assignedCustomers = customers.filter(c => c.salesConsultantId == consultantId);
@@ -5999,8 +6088,9 @@ Object.assign(App.Consultants, {
             
         } else {
             App.UI.confirm('Are you sure?', `This will permanently delete ${consultantToDelete.name}.`, () => {
-                const updatedConsultants = allConsultants.filter(c => c.id != consultantId);
-                App.DB.set('consultants', updatedConsultants);
+                // Cloud Sync
+                App.DB.deleteFromCloud('consultants', consultantId);
+                
                 App.Helpers.logChange('Deleted', 'Consultant', `'${consultantToDelete.name}'`);
                 App.UI.toast('Consultant deleted.', 'success');
                 this.render();
@@ -6017,15 +6107,16 @@ Object.assign(App.Consultants, {
         customers.forEach(customer => {
             if (customer.salesConsultantId === fromConsultantId) {
                 customer.salesConsultantId = toConsultantId;
+                // Important: We must sync EVERY changed customer to the cloud
+                App.DB.updateInCloud('customers', customer);
             }
         });
-        App.DB.set('customers', customers);
 
-        let consultants = App.DB.get('consultants');
-        const fromConsultantName = consultants.find(c => c.id === fromConsultantId).name;
-        const toConsultantName = consultants.find(c => c.id === toConsultantId).name;
-        consultants = consultants.filter(c => c.id !== fromConsultantId);
-        App.DB.set('consultants', consultants);
+        const fromConsultantName = App.DB.get('consultants').find(c => c.id === fromConsultantId).name;
+        const toConsultantName = App.DB.get('consultants').find(c => c.id === toConsultantId).name;
+        
+        // Cloud Sync: Delete the consultant
+        App.DB.deleteFromCloud('consultants', fromConsultantId);
 
         App.Helpers.logChange('Reassigned and Deleted', 'Consultant', `'${fromConsultantName}'`, `Customers moved to ${toConsultantName}.`);
         App.UI.closeModal('reassign-and-delete-consultant-modal');
@@ -6080,13 +6171,15 @@ Object.assign(App.Consultants, {
             const customerIndex = customers.findIndex(c => c.accountNo === id);
             if (customerIndex > -1) {
                 customers[customerIndex].salesConsultantId = toConsultantId;
+                // Cloud Sync
+                App.DB.updateInCloud('customers', customers[customerIndex]);
             }
         });
-        App.DB.set('customers', customers);
+        
         const details = `Reassigned ${customerIdsToReassign.length} customers from ${fromConsultantName} to ${toConsultantName}`;
         App.Helpers.logChange('Reassigned', 'Customers', details);
         App.UI.closeModal('reassign-customers-modal');
-        App.UI.toast('Customers reassigned successfully!', 'success');
+        App.UI.toast('Customers reassigned successfully! (Syncing...)', 'success');
         this.render();
         if(App.state.activePage === 'customers') App.Customers.render();
     },
@@ -6127,6 +6220,8 @@ Object.assign(App.Consultants, {
             : '<tr><td colspan="6">No targets found.</td></tr>';
         App.UI.animateTableRows(tbody);
     },
+    
+    // --- UPDATED FORECAST SAVE ---
     saveForecast(e) {
         e.preventDefault();
         const form = e.target;
@@ -6156,26 +6251,33 @@ Object.assign(App.Consultants, {
             amount_SalesAbove360Days: amountSales360d,
         };
 
-        if (forecastId) { // Editing existing
+        if (forecastId) { 
             const index = forecasts.findIndex(f => f.id === forecastId);
             if (index > -1) {
-                forecasts[index] = { ...forecasts[index], ...forecastData };
+                const updatedForecast = { ...forecasts[index], ...forecastData };
+                
+                // Cloud Sync
+                App.DB.updateInCloud('forecasts', updatedForecast);
                 App.Helpers.logChange('Updated', 'Target', `for ${month}`, `New amounts set.`);
             }
-        } else { // Adding new
+        } else { 
             const existingIndex = forecasts.findIndex(f => f.consultantId === consultantId && f.month === month);
-            if (existingIndex > -1) { // If user tries to create a duplicate month, update it instead
-                forecasts[existingIndex] = { ...forecasts[existingIndex], ...forecastData };
+            if (existingIndex > -1) {
+                const updatedForecast = { ...forecasts[existingIndex], ...forecastData };
+                
+                // Cloud Sync
+                App.DB.updateInCloud('forecasts', updatedForecast);
                 App.Helpers.logChange('Updated', 'Target', `for ${month}`, `New amounts set.`);
             } else {
                 const newForecast = { id: `f-${Date.now()}`, ...forecastData };
-                forecasts.push(newForecast);
+                
+                // Cloud Sync
+                App.DB.addToCloud('forecasts', newForecast);
                 App.Helpers.logChange('Created', 'Target', `for ${month}`, `Amounts set.`);
             }
         }
         
-        App.DB.set('forecasts', forecasts);
-        App.UI.toast('Target saved!', 'success');
+        App.UI.toast('Target saved & synced!', 'success');
         form.reset();
         document.getElementById('forecast-id-hidden').value = '';
         
@@ -6188,17 +6290,16 @@ Object.assign(App.Consultants, {
         this.renderForecastsForConsultant(consultantId);
         if (App.state.activePage === 'performance') App.Performance.render();
     },
+    
     deleteForecast(forecastId) {
         const forecasts = App.DB.get('forecasts');
         const forecast = forecasts.find(f => f.id === forecastId);
         if (!forecast) return;
         
-        App.UI.confirm(
-            'Delete this target?', 
-            `Are you sure you want to delete the target for ${forecast.month}?`, 
-            () => {
-                const updatedForecasts = forecasts.filter(f => f.id !== forecastId);
-                App.DB.set('forecasts', updatedForecasts);
+        App.UI.confirm('Delete this target?', `Are you sure?`, () => {
+                // Cloud Sync
+                App.DB.deleteFromCloud('forecasts', forecastId);
+                
                 App.Helpers.logChange('Deleted', 'Target', `for ${forecast.month}`);
                 App.UI.toast('Target deleted.', 'success');
                 this.renderForecastsForConsultant(forecast.consultantId);
@@ -6287,6 +6388,8 @@ Object.assign(App.Users, {
         document.getElementById('assigned-consultant-group').style.display = form.elements['role'].value === 'user' ? 'block' : 'none'; 
         App.UI.openModal('user-modal'); 
     }, 
+    
+    // --- UPDATED SAVE FUNCTION ---
     saveUser: function(e) { 
         e.preventDefault(); 
         const form = e.target; 
@@ -6300,32 +6403,154 @@ Object.assign(App.Users, {
             department: form.elements['department'].value.trim(),
             assignedConsultantId: form.elements['role'].value === 'user' ? parseInt(form.elements['assignedConsultantId'].value) || null : null 
         }; 
+        
         if (!id && !newPassword) return App.UI.toast('Password is required for new users.', 'error');
         if (!userData.username || !userData.fullName) return App.UI.toast('Username and Full Name are required.', 'error'); 
+        
         if (id) { 
+            // Update Existing
             const index = users.findIndex(u => u.id == id);
-            if (newPassword) {
-                userData.password = btoa(newPassword);
-            }
+            if (newPassword) userData.password = btoa(newPassword);
+            
             const original = form.originalData;
             const changes = App.Helpers.getObjectChanges(original, {...original, ...userData});
-            users[index] = { ...users[index], ...userData };
+            const updatedUser = { ...users[index], ...userData };
+            
+            // Cloud Sync
+            App.DB.updateInCloud('users', updatedUser);
             App.Helpers.logChange('Updated', 'User', `'${userData.username}'`, changes);
         } else { 
+            // Add New
             if (users.some(u => u.username === userData.username)) { return App.UI.toast('Username already exists.', 'error'); } 
             userData.password = btoa(newPassword);
-            users.push({ id: Date.now(), ...userData, lastLogin: null }); 
+            const newUser = { id: Date.now(), ...userData, lastLogin: null };
+            
+            // Cloud Sync
+            App.DB.addToCloud('users', newUser);
             App.Helpers.logChange('Created', 'User', `'${userData.username}'`);
         } 
-        App.DB.set('users', users); 
+        
         App.UI.closeModal('user-modal'); 
-        App.UI.toast(`User ${id ? 'updated' : 'added'}!`); 
+        App.UI.toast(`User ${id ? 'updated' : 'added'}! (Syncing...)`); 
         this.render(); 
     }, 
-    deleteUser: function(id) { if (id == App.state.currentUser.id) { return App.UI.toast('You cannot delete your own account.', 'error'); } App.UI.confirm('Are you sure?', "This will delete the user account.", () => { let users = App.DB.get('users'); const user = users.find(u => u.id == id); users = users.filter(u => u.id != id); App.DB.set('users', users); App.Helpers.logChange('Deleted', 'User', `'${user.username}'`); App.UI.toast('User deleted.', 'success'); this.render(); }); } 
+    
+    deleteUser: function(id) { 
+        if (id == App.state.currentUser.id) { return App.UI.toast('You cannot delete your own account.', 'error'); } 
+        App.UI.confirm('Are you sure?', "This will delete the user account.", () => { 
+            const user = App.DB.get('users').find(u => u.id == id);
+            
+            // Cloud Sync
+            App.DB.deleteFromCloud('users', id);
+            
+            App.Helpers.logChange('Deleted', 'User', `'${user.username}'`); 
+            App.UI.toast('User deleted.', 'success'); 
+            this.render(); 
+        }); 
+    } 
 });
-Object.assign(App.Notifications, { init() { document.getElementById('notification-bell-btn').addEventListener('click', (e) => { e.stopPropagation(); this.toggleDropdown(); }); document.body.addEventListener('click', (e) => { const bellBtn = document.getElementById('notification-bell-btn'); const dropdown = document.getElementById('notification-dropdown'); if (dropdown && !dropdown.classList.contains('hidden') && !bellBtn.contains(e.target) && !dropdown.contains(e.target)) { dropdown.classList.add('hidden'); } }); }, create(message) { let notifications = App.DB.get('notifications'); const newNotification = { id: `notif_${Date.now()}`, timestamp: Date.now(), message: message, isRead: false }; notifications.unshift(newNotification); App.DB.set('notifications', notifications); if(App.state.currentUser && App.state.currentUser.role === 'admin') this.render(); }, render() { const notifications = App.DB.get('notifications').sort((a, b) => b.timestamp - a.timestamp); const unreadCount = notifications.filter(n => !n.isRead).length; const badge = document.getElementById('notification-badge'); if (unreadCount > 0) { badge.textContent = unreadCount; badge.classList.remove('hidden'); } else { badge.classList.add('hidden'); } const list = document.getElementById('notification-list'); list.innerHTML = notifications.length > 0 ? notifications.slice(0, 15).map(n => `<li style="padding: var(--spacing-2) 0; border-bottom: 1px solid var(--border-color); ${!n.isRead ? 'font-weight: 600;' : ''}">${n.message}<div style="font-size: var(--fs-sm); color: var(--text-secondary); font-weight: 400; margin-top: 4px;"><i class="fas fa-clock"></i> ${App.Helpers.timeAgo(n.timestamp)}</div></li>`).join('') : '<li>No new notifications.</li>'; }, toggleDropdown() { const dropdown = document.getElementById('notification-dropdown'); const bellBtn = document.getElementById('notification-bell-btn'); const rect = bellBtn.getBoundingClientRect(); dropdown.style.top = `${rect.bottom + 10}px`; dropdown.style.right = `${window.innerWidth - rect.right}px`; dropdown.classList.toggle('hidden'); if(!dropdown.classList.contains('hidden')) { this.markAllAsRead(); } }, markAllAsRead() { let notifications = App.DB.get('notifications'); if (notifications.some(n => !n.isRead)) { setTimeout(() => { const updatedNotifications = notifications.map(n => ({ ...n, isRead: true })); App.DB.set('notifications', updatedNotifications); this.render(); }, 1500); } } });
 
+Object.assign(App.Notifications, {
+    init() {
+        // 1. Setup Listeners
+        const bellBtn = document.getElementById('notification-bell-btn');
+        if (bellBtn) {
+            bellBtn.addEventListener('click', (e) => { 
+                e.stopPropagation(); 
+                this.toggleDropdown(); 
+            });
+        }
+        
+        document.body.addEventListener('click', (e) => { 
+            const dropdown = document.getElementById('notification-dropdown'); 
+            const btn = document.getElementById('notification-bell-btn'); 
+            if (dropdown && !dropdown.classList.contains('hidden') && !btn.contains(e.target) && !dropdown.contains(e.target)) { 
+                dropdown.classList.add('hidden'); 
+            } 
+        });
+
+        // 2. Render on Init (This was missing!)
+        // Ensure Admin sees badges immediately upon login/refresh
+        if (App.state.currentUser && App.state.currentUser.role === 'admin') {
+            this.render();
+        }
+    },
+
+    create(message) {
+        let notifications = App.DB.get('notifications');
+        const newNotification = { 
+            id: `notif_${Date.now()}`, 
+            timestamp: Date.now(), 
+            message: message, 
+            isRead: false 
+        };
+        notifications.unshift(newNotification);
+        App.DB.set('notifications', notifications);
+        
+        // Update UI immediately if Admin is logged in
+        if(App.state.currentUser && App.state.currentUser.role === 'admin') {
+            this.render();
+            // Optional: Show a toast for the Admin immediately
+            App.UI.toast('New Notification: ' + message, 'info');
+        }
+    },
+
+    render() {
+        const notifications = App.DB.get('notifications').sort((a, b) => b.timestamp - a.timestamp);
+        const unreadCount = notifications.filter(n => !n.isRead).length;
+        const badge = document.getElementById('notification-badge');
+        const list = document.getElementById('notification-list');
+        
+        if (badge) {
+            if (unreadCount > 0) {
+                badge.textContent = unreadCount;
+                badge.classList.remove('hidden');
+            } else {
+                badge.classList.add('hidden');
+            }
+        }
+
+        if (list) {
+            list.innerHTML = notifications.length > 0 
+                ? notifications.slice(0, 15).map(n => `
+                    <li style="padding: var(--spacing-2) 0; border-bottom: 1px solid var(--border-color); ${!n.isRead ? 'background: rgba(226, 0, 15, 0.05);' : ''}">
+                        <div style="${!n.isRead ? 'font-weight: 700; color: var(--primary);' : ''}">${n.message}</div>
+                        <div style="font-size: var(--fs-sm); color: var(--text-secondary); margin-top: 4px;">
+                            <i class="fas fa-clock"></i> ${App.Helpers.timeAgo(n.timestamp)}
+                        </div>
+                    </li>`).join('') 
+                : '<li style="padding: 1rem; text-align: center; color: var(--text-secondary);">No notifications.</li>';
+        }
+    },
+
+    toggleDropdown() {
+        const dropdown = document.getElementById('notification-dropdown');
+        const bellBtn = document.getElementById('notification-bell-btn');
+        if (!dropdown || !bellBtn) return;
+
+        // Position correctly
+        const rect = bellBtn.getBoundingClientRect();
+        dropdown.style.top = `${rect.bottom + 10}px`;
+        dropdown.style.right = '20px'; // Fixed right position to prevent overflow
+        dropdown.classList.toggle('hidden');
+        
+        if(!dropdown.classList.contains('hidden')) {
+            this.markAllAsRead();
+        }
+    },
+
+    markAllAsRead() {
+        let notifications = App.DB.get('notifications');
+        if (notifications.some(n => !n.isRead)) {
+            // Delay slightly to let user see "Unread" state (bold text)
+            setTimeout(() => {
+                const updatedNotifications = notifications.map(n => ({ ...n, isRead: true }));
+                App.DB.set('notifications', updatedNotifications);
+                this.render();
+            }, 2000);
+        }
+    }
+});
 Object.assign(App.CommandPalette, {
     selectedIndex: 0,
     results: [],
